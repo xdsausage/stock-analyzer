@@ -3,12 +3,15 @@ import javax.swing.border.*;
 import java.awt.*;
 import java.awt.event.*;
 import java.awt.geom.Path2D;
+import java.awt.image.BufferedImage;
 import java.io.BufferedWriter;
 import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
+import java.net.URI;
 import java.text.NumberFormat;
 import java.text.SimpleDateFormat;
+import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
 import java.util.Locale;
@@ -120,9 +123,15 @@ public class Main {
 
     // --- Top-level window and layout ------------------------------------------
 
-    private JFrame mainWindow;
-    private JPanel resultsPanel;   // hidden until a stock is successfully loaded
-    private JLabel statusLabel;    // status bar at the bottom of the window
+    private JFrame     mainWindow;
+    private JPanel     topBar;              // NORTH panel; alert banner lives here
+    private FadePanel  resultsPanel;        // hidden until a stock is successfully loaded
+    private JLabel     statusLabel;         // status bar at the bottom of the window
+
+    // --- Center card panel (results ↔ portfolio toggle) ----------------------
+
+    private CardLayout centerCardLayout;    // controls which view is visible in the center
+    private JPanel     centerCardPanel;     // holds "results" and "portfolio" cards
 
     // --- Search bar -----------------------------------------------------------
 
@@ -179,9 +188,29 @@ public class Main {
 
     // --- Watchlist sidebar ---------------------------------------------------
 
-    private WatchlistManager watchlistManager;        // handles persistence
-    private JPanel           watchlistItemsContainer; // BoxLayout panel rebuilt on each refresh
-    private javax.swing.Timer watchlistRefreshTimer;  // fires every 60 s to update prices
+    private WatchlistManager  watchlistManager;        // handles persistence
+    private JPanel            watchlistItemsContainer; // BoxLayout panel rebuilt on each refresh
+    private javax.swing.Timer watchlistRefreshTimer;   // fires every 60 s to update prices
+
+    // --- In-app alert banner -------------------------------------------------
+
+    private JPanel            alertBannerPanel;       // slides down from top when alert fires
+    private JLabel            alertBannerLabel;       // message shown inside the banner
+    private javax.swing.Timer alertDismissTimer;      // auto-hides the banner after 5 s
+
+    // --- System tray icon (for background alerts) ----------------------------
+
+    private TrayIcon systemTrayIcon;   // created once, reused for all tray notifications
+
+    // --- News section --------------------------------------------------------
+
+    private JPanel newsSectionContainer;  // BoxLayout Y panel rebuilt after each stock fetch
+
+    // --- Portfolio -----------------------------------------------------------
+
+    private PortfolioManager portfolioManager;       // handles persistence
+    private JPanel           portfolioRowsContainer; // BoxLayout Y panel of position rows
+    private JLabel           portfolioTotalLabel;    // shows total value + overall P&L
 
     // --- Active chart state ---------------------------------------------------
 
@@ -226,32 +255,44 @@ public class Main {
      * Called once on the EDT at startup.
      */
     private void buildUI() {
-        // Load the persisted watchlist before building the UI so the sidebar
-        // is immediately populated when the window opens.
+        // Load persisted data before building the UI so sidebars are populated immediately.
         watchlistManager = new WatchlistManager();
         watchlistManager.load();
+        portfolioManager = new PortfolioManager();
+        portfolioManager.load();
 
         mainWindow = new JFrame("Stock Analyzer \u2014 NASDAQ & NYSE");
         mainWindow.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
         mainWindow.setMinimumSize(new Dimension(760, 600));
 
-        // Root panel uses BorderLayout:
-        //   NORTH  — header + search bar (always visible, never scrolls away)
-        //   CENTER — JScrollPane wrapping the results panel + status bar
-        //   EAST   — watchlist sidebar
+        // Root panel: NORTH = top bar, CENTER = scrollable content, EAST = watchlist
         JPanel rootPanel = new JPanel(new BorderLayout());
         rootPanel.setBackground(DARK_BACKGROUND);
 
-        // Top bar: header and search bar stacked, with padding
-        JPanel topBar = new JPanel(new BorderLayout());
+        // --- Alert banner (slides in at the very top when a price alert fires) ---
+        alertBannerPanel = new JPanel(new BorderLayout());
+        alertBannerPanel.setBackground(new Color(30, 100, 50));
+        alertBannerPanel.setVisible(false);
+        alertBannerPanel.setPreferredSize(new Dimension(0, 0));
+        alertBannerLabel = new JLabel("", SwingConstants.CENTER);
+        alertBannerLabel.setFont(BODY_FONT);
+        alertBannerLabel.setForeground(Color.WHITE);
+        alertBannerPanel.add(alertBannerLabel, BorderLayout.CENTER);
+
+        // Top bar: alert banner + header + search bar stacked
+        topBar = new JPanel(new BorderLayout());
         topBar.setBackground(DARK_BACKGROUND);
-        topBar.setBorder(new EmptyBorder(24, 28, 0, 8));
-        topBar.add(buildHeaderPanel(),    BorderLayout.NORTH);
-        topBar.add(buildSearchBarPanel(), BorderLayout.CENTER);
+        topBar.add(alertBannerPanel, BorderLayout.NORTH);
+
+        JPanel topBarContent = new JPanel(new BorderLayout());
+        topBarContent.setBackground(DARK_BACKGROUND);
+        topBarContent.setBorder(new EmptyBorder(24, 28, 0, 8));
+        topBarContent.add(buildHeaderPanel(),    BorderLayout.NORTH);
+        topBarContent.add(buildSearchBarPanel(), BorderLayout.CENTER);
+        topBar.add(topBarContent, BorderLayout.CENTER);
         rootPanel.add(topBar, BorderLayout.NORTH);
 
-        // Results panel sits inside a scroll pane so all content is reachable
-        // regardless of window size. The status bar is pinned below the scroll area.
+        // Results panel sits inside a scroll pane so all content is reachable.
         resultsPanel = buildResultsPanel();
         resultsPanel.setVisible(false);
 
@@ -270,27 +311,31 @@ public class Main {
         resultsScrollPane.getViewport().setBackground(DARK_BACKGROUND);
         resultsScrollPane.getVerticalScrollBar().setUnitIncrement(16);
 
+        // CardLayout lets the Portfolio view replace the results scroll pane
+        centerCardLayout = new CardLayout();
+        centerCardPanel  = new JPanel(centerCardLayout);
+        centerCardPanel.setBackground(DARK_BACKGROUND);
+        centerCardPanel.add(resultsScrollPane, "results");
+        centerCardPanel.add(buildPortfolioViewPanel(), "portfolio");
+
         JPanel centerContainer = new JPanel(new BorderLayout());
         centerContainer.setBackground(DARK_BACKGROUND);
         centerContainer.setBorder(new EmptyBorder(0, 28, 0, 8));
-        centerContainer.add(resultsScrollPane, BorderLayout.CENTER);
-        centerContainer.add(statusLabel,       BorderLayout.SOUTH);
-        rootPanel.add(centerContainer,         BorderLayout.CENTER);
+        centerContainer.add(centerCardPanel, BorderLayout.CENTER);
+        centerContainer.add(statusLabel,     BorderLayout.SOUTH);
+        rootPanel.add(centerContainer,       BorderLayout.CENTER);
 
         rootPanel.add(buildWatchlistSidebar(), BorderLayout.EAST);
 
         mainWindow.setContentPane(rootPanel);
-        // Start maximized so all content is visible without manual resizing
         mainWindow.setExtendedState(JFrame.MAXIMIZED_BOTH);
         mainWindow.setVisible(true);
 
-        // Start the background price-refresh timer.  Fires every 60 seconds and
-        // silently updates prices for all watchlist entries.
+        // Start watchlist price-refresh timer (fires every 60 s).
         watchlistRefreshTimer = new javax.swing.Timer(60_000,
                 e -> refreshWatchlistPricesInBackground());
         watchlistRefreshTimer.start();
 
-        // Kick off an immediate refresh so prices show straight away on startup.
         if (!watchlistManager.getEntries().isEmpty()) {
             refreshWatchlistPricesInBackground();
         }
@@ -319,6 +364,27 @@ public class Main {
         textStack.add(titleLabel);
         textStack.add(subtitleLabel);
         panel.add(textStack, BorderLayout.WEST);
+
+        // Portfolio toggle button — switches the center view between stock results
+        // and the portfolio tracker panel.
+        JButton portfolioButton = makeActionButton("\uD83D\uDCC8 Portfolio");
+        portfolioButton.addActionListener(e -> {
+            String current = centerCardLayout == null ? "results" : "results"; // default
+            // Toggle between "results" and "portfolio" cards
+            centerCardLayout.show(centerCardPanel, "portfolio");
+            refreshPortfolioPricesInBackground();
+        });
+
+        // Back-to-results button shown alongside the portfolio button for navigation
+        JButton backToStocksButton = makeActionButton("\u2190 Stocks");
+        backToStocksButton.addActionListener(e -> centerCardLayout.show(centerCardPanel, "results"));
+
+        JPanel navButtons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 0));
+        navButtons.setBackground(DARK_BACKGROUND);
+        navButtons.add(backToStocksButton);
+        navButtons.add(portfolioButton);
+        panel.add(navButtons, BorderLayout.EAST);
+
         return panel;
     }
 
@@ -366,8 +432,8 @@ public class Main {
      * chart section.  This panel is constructed once at startup and its child
      * labels are updated in-place by {@link #populateResultsFromStockData}.
      */
-    private JPanel buildResultsPanel() {
-        JPanel panel = new JPanel();
+    private FadePanel buildResultsPanel() {
+        FadePanel panel = new FadePanel();
         panel.setLayout(new BoxLayout(panel, BoxLayout.Y_AXIS));
         panel.setBackground(DARK_BACKGROUND);
 
@@ -478,6 +544,11 @@ public class Main {
 
         // --- Chart card -------------------------------------------------------
         panel.add(buildChartCard());
+        panel.add(verticalSpacer(10));
+
+        // --- News section (populated asynchronously after each stock fetch) ---
+        panel.add(buildNewsSection());
+        panel.add(verticalSpacer(16));
 
         return panel;
     }
@@ -684,12 +755,47 @@ public class Main {
         priceChangeStack.add(priceLabel);
         priceChangeStack.add(changePercentLabel);
 
+        // Bell button — set / clear a price alert for this ticker
+        boolean hasAlert = !Double.isNaN(entry.alertPrice);
+        JButton bellButton = new JButton(hasAlert ? "\uD83D\uDD14" : "\uD83D\uDD15");
+        bellButton.setFont(CAPTION_FONT);
+        bellButton.setForeground(hasAlert ? GAIN_COLOR : MUTED_TEXT);
+        bellButton.setBackground(CARD_BACKGROUND);
+        bellButton.setBorder(new EmptyBorder(2, 4, 2, 2));
+        bellButton.setFocusPainted(false);
+        bellButton.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        bellButton.setToolTipText(hasAlert
+                ? "Alert set at " + String.format("%.2f", entry.alertPrice) + " — click to clear"
+                : "Set price alert");
+        bellButton.addActionListener(e -> {
+            if (!Double.isNaN(entry.alertPrice)) {
+                // Clear existing alert
+                watchlistManager.clearAlert(entry.ticker);
+                rebuildWatchlistRows();
+            } else {
+                // Set new alert
+                String input = JOptionPane.showInputDialog(mainWindow,
+                        "Set alert price for " + entry.ticker + ":",
+                        "Price Alert", JOptionPane.PLAIN_MESSAGE);
+                if (input == null || input.isBlank()) return;
+                try {
+                    double alertPrice = Double.parseDouble(input.trim());
+                    watchlistManager.setAlert(entry.ticker, alertPrice);
+                    rebuildWatchlistRows();
+                } catch (NumberFormatException ex) {
+                    JOptionPane.showMessageDialog(mainWindow,
+                            "Please enter a valid price.", "Invalid Input",
+                            JOptionPane.ERROR_MESSAGE);
+                }
+            }
+        });
+
         // Remove button ("×") — removes this ticker from the watchlist
         JButton removeButton = new JButton("\u00D7");
         removeButton.setFont(CAPTION_FONT);
         removeButton.setForeground(MUTED_TEXT);
         removeButton.setBackground(CARD_BACKGROUND);
-        removeButton.setBorder(new EmptyBorder(2, 6, 2, 2));
+        removeButton.setBorder(new EmptyBorder(2, 4, 2, 2));
         removeButton.setFocusPainted(false);
         removeButton.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
         removeButton.addActionListener(e -> {
@@ -697,9 +803,14 @@ public class Main {
             rebuildWatchlistRows();
         });
 
+        JPanel buttonStack = new JPanel(new GridLayout(1, 2, 2, 0));
+        buttonStack.setBackground(CARD_BACKGROUND);
+        buttonStack.add(bellButton);
+        buttonStack.add(removeButton);
+
         row.add(tickerLabel,      BorderLayout.WEST);
         row.add(priceChangeStack, BorderLayout.CENTER);
-        row.add(removeButton,     BorderLayout.EAST);
+        row.add(buttonStack,      BorderLayout.EAST);
 
         // Hover highlight and click-to-load behaviour on the row panel itself.
         // Mouse events on child components (the remove button) do NOT bubble up
@@ -753,7 +864,16 @@ public class Main {
 
             @Override
             protected void process(List<WatchlistManager.WatchlistEntry> updatedEntries) {
-                // Called on the EDT after each publish() — update the sidebar incrementally
+                // Called on the EDT after each publish() — check alerts, then refresh sidebar
+                for (WatchlistManager.WatchlistEntry entry : updatedEntries) {
+                    if (!Double.isNaN(entry.alertPrice)
+                            && entry.lastKnownPrice > 0
+                            && entry.lastKnownPrice >= entry.alertPrice) {
+                        fireAlert(entry);
+                        entry.alertPrice = Double.NaN;      // consume the alert
+                        watchlistManager.save();
+                    }
+                }
                 rebuildWatchlistRows();
             }
 
@@ -787,8 +907,27 @@ public class Main {
         card.setBorder(BorderFactory.createCompoundBorder(
                 BorderFactory.createLineBorder(BORDER_COLOR, 1, true),
                 new EmptyBorder(10, 14, 10, 14)));
-        card.add(makeLabel(metricName, CAPTION_FONT, MUTED_TEXT));
+        JLabel nameLabel = makeLabel(metricName, CAPTION_FONT, MUTED_TEXT);
+        card.add(nameLabel);
         card.add(valueLabel);
+
+        // Hover highlight — background brightens when the mouse is over the card.
+        // The exit check uses the card's screen rectangle to avoid false exits
+        // when the cursor moves between the card panel and its child labels.
+        Color hoverBg = new Color(30, 40, 70);
+        MouseAdapter hover = new MouseAdapter() {
+            @Override public void mouseEntered(MouseEvent e) { card.setBackground(hoverBg); }
+            @Override public void mouseExited(MouseEvent e) {
+                // Only reset if the cursor actually left the card's bounding box
+                Point p = e.getPoint();
+                SwingUtilities.convertPointToScreen(p, e.getComponent());
+                SwingUtilities.convertPointFromScreen(p, card);
+                if (!card.contains(p)) card.setBackground(CARD_BACKGROUND);
+            }
+        };
+        card.addMouseListener(hover);
+        nameLabel.addMouseListener(hover);
+        valueLabel.addMouseListener(hover);
         return card;
     }
 
@@ -1085,7 +1224,30 @@ public class Main {
         resetIntervalSelectionToDefault();
         triggerChartFetch(stockData.symbol, currentBarInterval, currentTimeRange);
 
+        // Reset news section to loading state, then kick off a parallel fetch
+        if (newsSectionContainer != null) {
+            newsSectionContainer.removeAll();
+            JLabel loading = makeLabel("Loading news\u2026", CAPTION_FONT, MUTED_TEXT);
+            loading.setBorder(new EmptyBorder(6, 0, 0, 0));
+            newsSectionContainer.add(loading);
+            newsSectionContainer.revalidate();
+        }
+        final String newsTickerToFetch = stockData.symbol;
+        new SwingWorker<List<NewsItem>, Void>() {
+            @Override protected List<NewsItem> doInBackground() {
+                return YahooFinanceFetcher.fetchNews(newsTickerToFetch);
+            }
+            @Override protected void done() {
+                try { populateNewsSection(get()); }
+                catch (Exception ignored) { populateNewsSection(new ArrayList<>()); }
+            }
+        }.execute();
+
+        // Switch to the results card (in case portfolio was showing)
+        if (centerCardLayout != null) centerCardLayout.show(centerCardPanel, "results");
+
         resultsPanel.setVisible(true);
+        resultsPanel.fadeIn();
         mainWindow.revalidate();
         mainWindow.repaint();
     }
@@ -1163,6 +1325,401 @@ public class Main {
         } catch (IOException e) {
             showStatus("Export failed: " + e.getMessage(), LOSS_COLOR);
         }
+    }
+
+    // =========================================================================
+    // News feed
+    // =========================================================================
+
+    /**
+     * Builds the news section card that sits below the chart in the results panel.
+     * The inner container ({@link #newsSectionContainer}) starts with a "Loading..."
+     * placeholder and is replaced by actual news cards in {@link #populateNewsSection}.
+     */
+    private JPanel buildNewsSection() {
+        JPanel card = new JPanel(new BorderLayout(0, 8));
+        card.setBackground(CARD_BACKGROUND);
+        card.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createLineBorder(BORDER_COLOR, 1, true),
+                new EmptyBorder(12, 14, 12, 14)));
+        card.setAlignmentX(Component.LEFT_ALIGNMENT);
+
+        card.add(makeLabel("Latest News", STAT_VALUE_FONT, PRIMARY_TEXT), BorderLayout.NORTH);
+
+        newsSectionContainer = new JPanel();
+        newsSectionContainer.setLayout(new BoxLayout(newsSectionContainer, BoxLayout.Y_AXIS));
+        newsSectionContainer.setBackground(CARD_BACKGROUND);
+
+        JLabel placeholder = makeLabel("Loading news\u2026", CAPTION_FONT, MUTED_TEXT);
+        placeholder.setBorder(new EmptyBorder(6, 0, 0, 0));
+        newsSectionContainer.add(placeholder);
+
+        card.add(newsSectionContainer, BorderLayout.CENTER);
+        return card;
+    }
+
+    /**
+     * Builds a single news article card showing the title (clickable), publisher,
+     * and relative publish time.
+     */
+    private JPanel buildNewsCard(NewsItem item) {
+        JPanel card = new JPanel(new BorderLayout(0, 4));
+        card.setBackground(CARD_BACKGROUND);
+        card.setBorder(new EmptyBorder(8, 0, 8, 0));
+        card.setAlignmentX(Component.LEFT_ALIGNMENT);
+        card.setMaximumSize(new Dimension(Integer.MAX_VALUE, 80));
+
+        // Title — rendered as a read-only multi-line text area so long headlines wrap
+        JTextArea titleArea = new JTextArea(item.title());
+        titleArea.setFont(BODY_FONT);
+        titleArea.setForeground(PRIMARY_TEXT);
+        titleArea.setBackground(CARD_BACKGROUND);
+        titleArea.setEditable(false);
+        titleArea.setFocusable(false);
+        titleArea.setLineWrap(true);
+        titleArea.setWrapStyleWord(true);
+        titleArea.setOpaque(false);
+        titleArea.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        titleArea.addMouseListener(new MouseAdapter() {
+            @Override public void mouseClicked(MouseEvent e) {
+                try { Desktop.getDesktop().browse(new URI(item.url())); }
+                catch (Exception ignored) {}
+            }
+            @Override public void mouseEntered(MouseEvent e) { titleArea.setForeground(ACCENT_COLOR); }
+            @Override public void mouseExited(MouseEvent e)  { titleArea.setForeground(PRIMARY_TEXT); }
+        });
+
+        // Publisher + relative time (e.g. "Reuters · 3h ago")
+        String relTime = formatRelativeTime(item.publishedAt());
+        JLabel metaLabel = makeLabel(item.publisher() + " \u00B7 " + relTime, CAPTION_FONT, MUTED_TEXT);
+
+        card.add(titleArea,  BorderLayout.CENTER);
+        card.add(metaLabel,  BorderLayout.SOUTH);
+        return card;
+    }
+
+    /**
+     * Clears the news section container and populates it with fresh news cards.
+     * Shows a "No news available" hint when the list is empty.
+     * Must be called on the EDT.
+     */
+    private void populateNewsSection(List<NewsItem> items) {
+        if (newsSectionContainer == null) return;
+        newsSectionContainer.removeAll();
+        if (items.isEmpty()) {
+            JLabel empty = makeLabel("No news available.", CAPTION_FONT, MUTED_TEXT);
+            empty.setBorder(new EmptyBorder(6, 0, 0, 0));
+            newsSectionContainer.add(empty);
+        } else {
+            for (int i = 0; i < items.size(); i++) {
+                newsSectionContainer.add(buildNewsCard(items.get(i)));
+                if (i < items.size() - 1) {
+                    JSeparator sep = new JSeparator();
+                    sep.setForeground(BORDER_COLOR);
+                    sep.setBackground(BORDER_COLOR);
+                    newsSectionContainer.add(sep);
+                }
+            }
+        }
+        newsSectionContainer.revalidate();
+        newsSectionContainer.repaint();
+    }
+
+    /** Formats a Unix timestamp (seconds) as a human-readable relative string, e.g. "3h ago". */
+    private String formatRelativeTime(long publishedAtSeconds) {
+        if (publishedAtSeconds == 0) return "";
+        long diff = System.currentTimeMillis() / 1000 - publishedAtSeconds;
+        if (diff < 60)     return diff + "s ago";
+        if (diff < 3600)   return (diff / 60) + "m ago";
+        if (diff < 86400)  return (diff / 3600) + "h ago";
+        return (diff / 86400) + "d ago";
+    }
+
+    // =========================================================================
+    // Price alerts
+    // =========================================================================
+
+    /**
+     * Fires a price alert for {@code entry}.  Shows an in-app sliding banner
+     * when the window is focused, or a Windows system-tray notification otherwise.
+     */
+    private void fireAlert(WatchlistManager.WatchlistEntry entry) {
+        String msg = "\uD83D\uDD14  " + entry.ticker + " reached "
+                + String.format("%.2f", entry.lastKnownPrice)
+                + " \u2014 alert triggered";
+
+        if (mainWindow.isFocused()) {
+            showAlertBanner(msg);
+        } else {
+            showTrayNotification(entry.ticker + " price alert",
+                    entry.ticker + " reached " + String.format("%.2f", entry.lastKnownPrice));
+        }
+    }
+
+    /**
+     * Animates the alert banner into view from the top of the window, then
+     * auto-dismisses it after 5 seconds.
+     */
+    private void showAlertBanner(String message) {
+        if (alertDismissTimer != null) alertDismissTimer.stop();
+        alertBannerLabel.setText(message);
+        alertBannerPanel.setVisible(true);
+
+        // Animate height from 0 → 40 px
+        final int[] h = {0};
+        javax.swing.Timer growTimer = new javax.swing.Timer(16, null);
+        growTimer.addActionListener(e -> {
+            h[0] = Math.min(40, h[0] + 4);
+            alertBannerPanel.setPreferredSize(new Dimension(0, h[0]));
+            topBar.revalidate();
+            if (h[0] >= 40) {
+                growTimer.stop();
+                alertDismissTimer = new javax.swing.Timer(5000, ev -> hideAlertBanner());
+                alertDismissTimer.setRepeats(false);
+                alertDismissTimer.start();
+            }
+        });
+        growTimer.start();
+    }
+
+    /** Hides the alert banner immediately. */
+    private void hideAlertBanner() {
+        alertBannerPanel.setVisible(false);
+        alertBannerPanel.setPreferredSize(new Dimension(0, 0));
+        topBar.revalidate();
+    }
+
+    /**
+     * Shows a Windows system-tray notification.  Creates the tray icon on first
+     * use.  Does nothing if {@link SystemTray#isSupported()} is {@code false}.
+     */
+    private void showTrayNotification(String title, String text) {
+        if (!SystemTray.isSupported()) return;
+        if (systemTrayIcon == null) {
+            // Create a simple 16×16 coloured icon for the tray
+            BufferedImage img = new BufferedImage(16, 16, BufferedImage.TYPE_INT_ARGB);
+            Graphics2D g = img.createGraphics();
+            g.setColor(ACCENT_COLOR);
+            g.fillRect(0, 0, 16, 16);
+            g.dispose();
+            systemTrayIcon = new TrayIcon(img, "Stock Analyzer");
+            systemTrayIcon.setImageAutoSize(true);
+            try {
+                SystemTray.getSystemTray().add(systemTrayIcon);
+            } catch (AWTException e) {
+                systemTrayIcon = null;
+                return;
+            }
+        }
+        systemTrayIcon.displayMessage(title, text, TrayIcon.MessageType.INFO);
+    }
+
+    // =========================================================================
+    // Portfolio view
+    // =========================================================================
+
+    /**
+     * Builds the full portfolio view panel: header row, scrollable position list,
+     * and footer totals row.
+     */
+    private JPanel buildPortfolioViewPanel() {
+        JPanel view = new JPanel(new BorderLayout(0, 0));
+        view.setBackground(DARK_BACKGROUND);
+
+        // --- Header ---
+        JPanel header = new JPanel(new BorderLayout(8, 0));
+        header.setBackground(DARK_BACKGROUND);
+        header.setBorder(new EmptyBorder(16, 0, 10, 0));
+
+        JLabel titleLbl = makeLabel("Portfolio", HEADING_FONT, PRIMARY_TEXT);
+
+        JButton addBtn = makeActionButton("\uFF0B Add Position");
+        addBtn.addActionListener(e -> showAddPositionDialog());
+
+        portfolioTotalLabel = makeLabel("", BODY_FONT, MUTED_TEXT);
+        portfolioTotalLabel.setHorizontalAlignment(SwingConstants.RIGHT);
+
+        header.add(titleLbl,            BorderLayout.WEST);
+        header.add(portfolioTotalLabel, BorderLayout.CENTER);
+        header.add(addBtn,              BorderLayout.EAST);
+        view.add(header, BorderLayout.NORTH);
+
+        // --- Rows container ---
+        portfolioRowsContainer = new JPanel();
+        portfolioRowsContainer.setLayout(new BoxLayout(portfolioRowsContainer, BoxLayout.Y_AXIS));
+        portfolioRowsContainer.setBackground(DARK_BACKGROUND);
+
+        JScrollPane scroll = new JScrollPane(portfolioRowsContainer,
+                JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED,
+                JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
+        scroll.setBorder(null);
+        scroll.getViewport().setBackground(DARK_BACKGROUND);
+        scroll.getVerticalScrollBar().setUnitIncrement(16);
+        view.add(scroll, BorderLayout.CENTER);
+
+        refreshPortfolioView();
+        return view;
+    }
+
+    /**
+     * Builds a single portfolio position row displaying ticker, shares, average
+     * buy price, current price, market value, gain/loss, and a remove button.
+     */
+    private JPanel buildPortfolioRow(PortfolioManager.PortfolioPosition pos) {
+        JPanel row = new JPanel(new GridLayout(1, 8, 6, 0));
+        row.setBackground(CARD_BACKGROUND);
+        row.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createLineBorder(BORDER_COLOR, 1, true),
+                new EmptyBorder(10, 12, 10, 12)));
+        row.setAlignmentX(Component.LEFT_ALIGNMENT);
+        row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 54));
+
+        Color gainOrLoss = pos.unrealizedGain() >= 0 ? GAIN_COLOR : LOSS_COLOR;
+        String gainSign  = pos.unrealizedGain() >= 0 ? "+" : "";
+
+        row.add(makeLabel(pos.ticker,                                    STAT_VALUE_FONT, ACCENT_COLOR));
+        row.add(makeLabel(String.format("%.4f shs", pos.sharesOwned),    BODY_FONT,       PRIMARY_TEXT));
+        row.add(makeLabel(String.format("$%.2f avg", pos.averageBuyPrice), BODY_FONT,     MUTED_TEXT));
+        row.add(makeLabel(pos.currentPrice == 0 ? "\u2014"
+                : String.format("$%.2f", pos.currentPrice),              BODY_FONT,       PRIMARY_TEXT));
+        row.add(makeLabel(pos.currentPrice == 0 ? "\u2014"
+                : String.format("$%.2f", pos.marketValue()),             BODY_FONT,       PRIMARY_TEXT));
+        row.add(makeLabel(pos.currentPrice == 0 ? "\u2014"
+                : String.format("%s$%.2f", gainSign, pos.unrealizedGain()), BODY_FONT,   gainOrLoss));
+        row.add(makeLabel(pos.currentPrice == 0 ? "\u2014"
+                : String.format("%s%.2f%%", gainSign, pos.unrealizedGainPercent()), BODY_FONT, gainOrLoss));
+
+        JButton removeBtn = new JButton("\u00D7");
+        removeBtn.setFont(CAPTION_FONT);
+        removeBtn.setForeground(MUTED_TEXT);
+        removeBtn.setBackground(CARD_BACKGROUND);
+        removeBtn.setBorder(new EmptyBorder(2, 6, 2, 2));
+        removeBtn.setFocusPainted(false);
+        removeBtn.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        removeBtn.addActionListener(e -> {
+            portfolioManager.remove(pos.ticker);
+            refreshPortfolioView();
+        });
+        row.add(removeBtn);
+        return row;
+    }
+
+    /** Clears and rebuilds the portfolio rows container from current data. Must be on EDT. */
+    private void refreshPortfolioView() {
+        if (portfolioRowsContainer == null) return;
+        portfolioRowsContainer.removeAll();
+
+        // Column headers
+        JPanel headers = new JPanel(new GridLayout(1, 8, 6, 0));
+        headers.setBackground(DARK_BACKGROUND);
+        headers.setBorder(new EmptyBorder(0, 12, 4, 12));
+        headers.setAlignmentX(Component.LEFT_ALIGNMENT);
+        headers.setMaximumSize(new Dimension(Integer.MAX_VALUE, 24));
+        for (String col : new String[]{"Ticker", "Shares", "Avg Buy", "Price", "Value", "Gain $", "Gain %", ""}) {
+            headers.add(makeLabel(col, CAPTION_FONT, MUTED_TEXT));
+        }
+        portfolioRowsContainer.add(headers);
+        portfolioRowsContainer.add(Box.createVerticalStrut(2));
+
+        List<PortfolioManager.PortfolioPosition> positions = portfolioManager.getPositions();
+        if (positions.isEmpty()) {
+            JLabel empty = makeLabel("No positions yet. Click \"\uFF0B Add Position\" to get started.",
+                    BODY_FONT, MUTED_TEXT);
+            empty.setBorder(new EmptyBorder(20, 12, 8, 12));
+            empty.setAlignmentX(Component.LEFT_ALIGNMENT);
+            portfolioRowsContainer.add(empty);
+        } else {
+            double totalValue = 0, totalGain = 0, totalCost = 0;
+            for (PortfolioManager.PortfolioPosition pos : positions) {
+                portfolioRowsContainer.add(buildPortfolioRow(pos));
+                portfolioRowsContainer.add(Box.createVerticalStrut(4));
+                totalValue += pos.marketValue();
+                totalGain  += pos.unrealizedGain();
+                totalCost  += pos.sharesOwned * pos.averageBuyPrice;
+            }
+            double pct = totalCost > 0 ? totalGain / totalCost * 100 : 0;
+            String sign = totalGain >= 0 ? "+" : "";
+            if (portfolioTotalLabel != null) {
+                portfolioTotalLabel.setText(String.format(
+                        "Total: $%.2f  |  %s$%.2f  (%s%.2f%%)",
+                        totalValue, sign, totalGain, sign, pct));
+                portfolioTotalLabel.setForeground(totalGain >= 0 ? GAIN_COLOR : LOSS_COLOR);
+            }
+        }
+        portfolioRowsContainer.revalidate();
+        portfolioRowsContainer.repaint();
+    }
+
+    /**
+     * Opens a dialog for the user to add a new portfolio position.
+     * Validates input and calls {@link PortfolioManager#add} on success.
+     */
+    private void showAddPositionDialog() {
+        JTextField tickerField   = new JTextField(8);
+        JTextField sharesField   = new JTextField(8);
+        JTextField buyPriceField = new JTextField(8);
+
+        JPanel form = new JPanel(new GridLayout(3, 2, 8, 6));
+        form.add(new JLabel("Ticker:"));       form.add(tickerField);
+        form.add(new JLabel("Shares:"));       form.add(sharesField);
+        form.add(new JLabel("Avg Buy Price:")); form.add(buyPriceField);
+
+        int result = JOptionPane.showConfirmDialog(mainWindow, form,
+                "Add Portfolio Position", JOptionPane.OK_CANCEL_OPTION,
+                JOptionPane.PLAIN_MESSAGE);
+        if (result != JOptionPane.OK_OPTION) return;
+
+        try {
+            String ticker = tickerField.getText().trim().toUpperCase();
+            double shares = Double.parseDouble(sharesField.getText().trim());
+            double price  = Double.parseDouble(buyPriceField.getText().trim());
+            if (ticker.isEmpty() || shares <= 0 || price < 0) throw new NumberFormatException();
+            portfolioManager.add(ticker, shares, price, "USD");
+            refreshPortfolioView();
+            refreshPortfolioPricesInBackground();
+        } catch (NumberFormatException e) {
+            JOptionPane.showMessageDialog(mainWindow,
+                    "Please enter a valid ticker, share count, and price.",
+                    "Invalid Input", JOptionPane.ERROR_MESSAGE);
+        }
+    }
+
+    /**
+     * Fetches the current price for each portfolio position on a background
+     * thread, updating {@code currentPrice} on each position, then calls
+     * {@link #refreshPortfolioView()} on the EDT.
+     */
+    private void refreshPortfolioPricesInBackground() {
+        List<PortfolioManager.PortfolioPosition> snapshot = portfolioManager.getPositions();
+        if (snapshot.isEmpty()) return;
+
+        new SwingWorker<Void, PortfolioManager.PortfolioPosition>() {
+            @Override
+            protected Void doInBackground() {
+                for (PortfolioManager.PortfolioPosition pos : snapshot) {
+                    try {
+                        StockData data = YahooFinanceFetcher.fetch(pos.ticker);
+                        pos.currentPrice = data.currentPrice;
+                        if (data.currency != null) pos.currency = data.currency;
+                        publish(pos);
+                    } catch (Exception ignored) {}
+                }
+                return null;
+            }
+            @Override
+            protected void process(List<PortfolioManager.PortfolioPosition> updated) {
+                // Propagate the fetched prices back into the live portfolio list
+                for (PortfolioManager.PortfolioPosition snap : updated) {
+                    for (PortfolioManager.PortfolioPosition live : portfolioManager.getPositions()) {
+                        if (live.ticker.equals(snap.ticker)) {
+                            live.currentPrice = snap.currentPrice;
+                            live.currency     = snap.currency;
+                        }
+                    }
+                }
+                refreshPortfolioView();
+            }
+        }.execute();
     }
 
     // =========================================================================
@@ -1308,12 +1865,25 @@ public class Main {
 
         // ---- Indicator colours (not part of the outer class palette) --------
 
+        /** Brighter cyan-blue for the main price line and its glow. */
+        private static final Color PRICE_LINE_COLOR      = new Color(120, 200, 255);
         /** Line colour for the 20-period MA overlay. */
-        private static final Color MA20_LINE_COLOR = new Color(255, 165,   0); // orange
+        private static final Color MA20_LINE_COLOR       = new Color(255, 165,   0); // orange
         /** Line colour for the 50-period MA overlay. */
-        private static final Color MA50_LINE_COLOR = new Color(180, 100, 255); // purple
+        private static final Color MA50_LINE_COLOR       = new Color(180, 100, 255); // purple
         /** Line colour for the comparison series. */
         private static final Color COMPARISON_LINE_COLOR = new Color(255, 200,  50); // yellow
+
+        // ---- Animation state ------------------------------------------------
+
+        /**
+         * Progress of the chart-draw animation, 0 → 1.  The chart is clipped
+         * to this fraction of its width so it "draws itself" left to right.
+         */
+        private float animationProgress = 1f;
+
+        /** Timer that drives the chart-draw animation at ~60 fps. */
+        private javax.swing.Timer animationTimer;
 
         // ---- Constructor ----------------------------------------------------
 
@@ -1377,12 +1947,24 @@ public class Main {
             repaint();
         }
 
-        /** Installs new chart data and triggers a repaint. */
+        /**
+         * Installs new chart data and starts the left-to-right draw animation.
+         */
         void setChartData(ChartData data) {
             mainChartData = data;
             placeholderMessage = null;
             hoveredDataIndex = -1;
-            repaint();
+
+            // Start draw-in animation (progress 0 → 1 over ~25 frames ≈ 400 ms)
+            if (animationTimer != null) animationTimer.stop();
+            animationProgress = 0f;
+            animationTimer = new javax.swing.Timer(16, null);
+            animationTimer.addActionListener(e -> {
+                animationProgress = Math.min(1f, animationProgress + 0.04f);
+                repaint();
+                if (animationProgress >= 1f) animationTimer.stop();
+            });
+            animationTimer.start();
         }
 
         // ---- Mouse hover tracking -------------------------------------------
@@ -1521,6 +2103,14 @@ public class Main {
                         gridY + fontMetrics.getAscent() / 2 - 1);
             }
 
+            // --- Set animation clip (reveals chart drawing left to right) ----
+            // Saved so it can be restored before drawing labels and the tooltip.
+            Shape savedClip = g2.getClip();
+            if (animationProgress < 1f) {
+                int clipX = (int)(leftPadding + chartWidth * animationProgress + 0.5f);
+                g2.clipRect(0, 0, clipX, canvasHeight);
+            }
+
             // --- Gradient fill under the main price line (normal mode only) --
             if (!isComparisonMode) {
                 Path2D fillArea = new Path2D.Double();
@@ -1532,9 +2122,11 @@ public class Main {
                 fillArea.closePath();
                 g2.setPaint(new GradientPaint(
                         0, topPadding,
-                        new Color(ACCENT_COLOR.getRed(), ACCENT_COLOR.getGreen(), ACCENT_COLOR.getBlue(), 60),
+                        new Color(PRICE_LINE_COLOR.getRed(), PRICE_LINE_COLOR.getGreen(),
+                                PRICE_LINE_COLOR.getBlue(), 46),
                         0, topPadding + priceAreaHeight,
-                        new Color(ACCENT_COLOR.getRed(), ACCENT_COLOR.getGreen(), ACCENT_COLOR.getBlue(), 0)));
+                        new Color(PRICE_LINE_COLOR.getRed(), PRICE_LINE_COLOR.getGreen(),
+                                PRICE_LINE_COLOR.getBlue(), 0)));
                 g2.fill(fillArea);
             }
 
@@ -1552,12 +2144,27 @@ public class Main {
                 }
             }
 
-            // --- Main price line --------------------------------------------
-            g2.setColor(ACCENT_COLOR);
-            g2.setStroke(new BasicStroke(1.8f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
-            for (int i = 0; i < dataPointCount - 1; i++) {
-                g2.drawLine(xPositions[i], yPositions[i], xPositions[i + 1], yPositions[i + 1]);
+            // --- Main price line with glow effect ---------------------------
+            // Build the path once and draw it three times with decreasing stroke
+            // widths and increasing opacity to create a neon-glow appearance.
+            Path2D pricePath = new Path2D.Double();
+            pricePath.moveTo(xPositions[0], yPositions[0]);
+            for (int i = 1; i < dataPointCount; i++) {
+                pricePath.lineTo(xPositions[i], yPositions[i]);
             }
+            g2.setColor(PRICE_LINE_COLOR);
+            // Glow layer 1: wide, very faint
+            g2.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC_OVER, 40f / 255f));
+            g2.setStroke(new BasicStroke(5f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+            g2.draw(pricePath);
+            // Glow layer 2: medium, semi-transparent
+            g2.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC_OVER, 80f / 255f));
+            g2.setStroke(new BasicStroke(3f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+            g2.draw(pricePath);
+            // Core line: narrow, fully opaque
+            g2.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC_OVER, 1f));
+            g2.setStroke(new BasicStroke(1.8f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+            g2.draw(pricePath);
 
             // --- Comparison series line + legend ----------------------------
             if (isComparisonMode) {
@@ -1601,6 +2208,9 @@ public class Main {
                         rsiTop, rsiPanelHeight, fontMetrics);
             }
 
+            // Restore the clip so X-axis labels and the tooltip always render fully
+            g2.setClip(savedClip);
+
             // --- X-axis date labels ------------------------------------------
             // Use HH:mm for intraday data and MM/dd for multi-day data.
             boolean isIntradayData =
@@ -1638,7 +2248,7 @@ public class Main {
 
                 // Dot at the data point position on the price line
                 g2.setStroke(new BasicStroke(1.5f));
-                g2.setColor(ACCENT_COLOR);
+                g2.setColor(PRICE_LINE_COLOR);
                 g2.fillOval(crosshairX - 4, crosshairY - 4, 8, 8);
                 g2.setColor(CARD_BACKGROUND);
                 g2.fillOval(crosshairX - 2, crosshairY - 2, 4, 4);
@@ -1743,9 +2353,15 @@ public class Main {
                                      int panelTop, int panelHeight, FontMetrics fontMetrics) {
             double[] rsiValues = IndicatorCalculator.computeRSI(prices, 14);
 
+            // Separator line between volume bars and RSI panel
+            g2.setColor(new Color(MUTED_TEXT.getRed(), MUTED_TEXT.getGreen(),
+                    MUTED_TEXT.getBlue(), 60));
+            g2.setStroke(new BasicStroke(1f));
+            g2.drawLine(leftPadding, panelTop, leftPadding + chartWidth, panelTop);
+
             // Dark background to visually separate RSI from the chart above it
             g2.setColor(new Color(20, 20, 38));
-            g2.fillRect(leftPadding, panelTop, chartWidth, panelHeight);
+            g2.fillRect(leftPadding, panelTop + 1, chartWidth, panelHeight - 1);
 
             // Overbought (70) and oversold (30) horizontal reference lines
             int y70 = panelTop + (int) (panelHeight * (100 - 70) / 100.0);
@@ -1810,8 +2426,8 @@ public class Main {
 
             int lineHeight = fontMetrics.getHeight();
 
-            // Main ticker row (accent blue swatch)
-            g2.setColor(ACCENT_COLOR);
+            // Main ticker row (price line colour swatch)
+            g2.setColor(PRICE_LINE_COLOR);
             g2.fillRect(boxX + 8, boxY + lineHeight - fontMetrics.getAscent() + 2, 8, 8);
             g2.setColor(PRIMARY_TEXT);
             g2.drawString(mainLegendText, boxX + 20, boxY + lineHeight);

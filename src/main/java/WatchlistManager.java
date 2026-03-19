@@ -35,7 +35,7 @@ public class WatchlistManager {
      */
     public static class WatchlistEntry implements Serializable {
 
-        private static final long serialVersionUID = 1L;
+        private static final long serialVersionUID = 2L;
 
         /** Upper-case ticker symbol, e.g. "AAPL". */
         public String ticker;
@@ -54,6 +54,14 @@ public class WatchlistManager {
 
         /** ISO 4217 currency code for {@link #lastKnownPrice}, e.g. "USD". */
         public String currency;
+
+        /**
+         * Price level at which a price-alert should fire.
+         * {@code Double.NaN} means no alert is set for this entry.
+         * The alert fires when {@link #lastKnownPrice} first reaches or exceeds
+         * this value, after which it is automatically reset to NaN.
+         */
+        public double alertPrice = Double.NaN;
 
         public WatchlistEntry(String ticker) {
             this.ticker                = ticker;
@@ -88,6 +96,35 @@ public class WatchlistManager {
     public void remove(String ticker) {
         watchedTickers.removeIf(e -> e.ticker.equalsIgnoreCase(ticker));
         save();
+    }
+
+    /**
+     * Sets a price alert for the given ticker.  The alert fires the next time
+     * the ticker's price reaches or exceeds {@code price}.
+     * Does nothing if the ticker is not in the watchlist.
+     */
+    public void setAlert(String ticker, double price) {
+        for (WatchlistEntry entry : watchedTickers) {
+            if (entry.ticker.equalsIgnoreCase(ticker)) {
+                entry.alertPrice = price;
+                save();
+                return;
+            }
+        }
+    }
+
+    /**
+     * Clears any active price alert for the given ticker.
+     * Does nothing if the ticker is not in the watchlist or has no alert set.
+     */
+    public void clearAlert(String ticker) {
+        for (WatchlistEntry entry : watchedTickers) {
+            if (entry.ticker.equalsIgnoreCase(ticker)) {
+                entry.alertPrice = Double.NaN;
+                save();
+                return;
+            }
+        }
     }
 
     /**

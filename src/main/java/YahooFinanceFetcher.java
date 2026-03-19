@@ -96,6 +96,15 @@ public class YahooFinanceFetcher {
             "https://query1.finance.yahoo.com/v8/finance/chart/%s" +
             "?interval=%s&range=%s&crumb=%s";
 
+    /**
+     * Yahoo Finance search endpoint — returns news articles matching a query.
+     * Format arg: (1) URL-encoded ticker symbol.
+     * {@code quotesCount=0} suppresses quote results so only news is returned.
+     */
+    private static final String NEWS_SEARCH_URL =
+            "https://query1.finance.yahoo.com/v1/finance/search" +
+            "?q=%s&newsCount=8&quotesCount=0";
+
     // =========================================================================
     // Session state
     // =========================================================================
@@ -180,6 +189,69 @@ public class YahooFinanceFetcher {
         }
 
         return parseChartData(response.body());
+    }
+
+    /**
+     * Fetches up to 8 recent news articles for {@code ticker} and returns them
+     * as a list of {@link NewsItem} records.
+     *
+     * <p>Never throws — returns an empty list on any error (network failure,
+     * parse error, empty response) so callers can display a graceful fallback.
+     *
+     * @param ticker stock ticker symbol (case-insensitive)
+     * @return list of news items, possibly empty; never {@code null}
+     */
+    public static List<NewsItem> fetchNews(String ticker) {
+        try {
+            String url = String.format(NEWS_SEARCH_URL,
+                    java.net.URLEncoder.encode(ticker.toUpperCase(),
+                            java.nio.charset.StandardCharsets.UTF_8));
+            HttpResponse<String> response = sendGetRequest(url);
+            if (response.statusCode() != 200) return new ArrayList<>();
+            return parseNewsItems(response.body());
+        } catch (Exception e) {
+            return new ArrayList<>();
+        }
+    }
+
+    /**
+     * Parses the JSON body of a {@code /v1/finance/search} response and
+     * extracts the {@code news} array into a list of {@link NewsItem} records.
+     *
+     * <p>Expected structure:
+     * <pre>
+     * { "news": [ {
+     *     "title": "...",
+     *     "publisher": "...",
+     *     "link": "https://...",
+     *     "providerPublishTime": 1700000000
+     * }, ... ] }
+     * </pre>
+     */
+    private static List<NewsItem> parseNewsItems(String body) {
+        List<NewsItem> items = new ArrayList<>();
+        try {
+            JsonObject root = JsonParser.parseString(body).getAsJsonObject();
+            JsonArray newsArray = root.getAsJsonArray("news");
+            if (newsArray == null) return items;
+            for (JsonElement element : newsArray) {
+                JsonObject article = element.getAsJsonObject();
+                String title     = extractString(article, "title");
+                String publisher = extractString(article, "publisher");
+                String url       = extractString(article, "link");
+                long   published = article.has("providerPublishTime")
+                        && !article.get("providerPublishTime").isJsonNull()
+                        ? article.get("providerPublishTime").getAsLong() : 0L;
+                if (title != null && url != null) {
+                    items.add(new NewsItem(
+                            title,
+                            publisher != null ? publisher : "Unknown",
+                            url,
+                            published));
+                }
+            }
+        } catch (Exception ignored) { /* return whatever was collected */ }
+        return items;
     }
 
     // =========================================================================
