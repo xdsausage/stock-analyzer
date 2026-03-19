@@ -103,7 +103,12 @@ public class YahooFinanceFetcher {
      */
     private static final String NEWS_SEARCH_URL =
             "https://query1.finance.yahoo.com/v1/finance/search" +
-            "?q=%s&newsCount=8&quotesCount=0";
+            "?q=%s&newsCount=%d&quotesCount=0";
+
+    /** Predefined screener endpoint that returns quote rows for a named Yahoo screen. */
+    private static final String PREDEFINED_SCREENER_URL =
+            "https://query1.finance.yahoo.com/v1/finance/screener/predefined/saved" +
+            "?formatted=false&count=%d&scrIds=%s";
 
     /** Options chain endpoint — returns calls/puts for the nearest expiration. */
     private static final String OPTIONS_URL =
@@ -210,13 +215,77 @@ public class YahooFinanceFetcher {
      * @return list of news items, possibly empty; never {@code null}
      */
     public static List<NewsItem> fetchNews(String ticker) {
+        return fetchNews(ticker, 8);
+    }
+
+    /**
+     * Fetches up to {@code maxItems} recent news articles for an arbitrary
+     * keyword query and returns them in the endpoint's relevance order.
+     */
+    public static List<NewsItem> fetchNews(String query, int maxItems) {
         try {
             String url = String.format(NEWS_SEARCH_URL,
-                    java.net.URLEncoder.encode(ticker.toUpperCase(),
-                            java.nio.charset.StandardCharsets.UTF_8));
+                    java.net.URLEncoder.encode(query.trim(),
+                            java.nio.charset.StandardCharsets.UTF_8),
+                    Math.max(1, maxItems));
             HttpResponse<String> response = sendGetRequest(url);
             if (response.statusCode() != 200) return new ArrayList<>();
             return parseNewsItems(response.body());
+        } catch (Exception e) {
+            return new ArrayList<>();
+        }
+    }
+
+    /**
+     * Returns the most relevant market-news items for today. The Yahoo search
+     * endpoint already sorts by relevance, so this method keeps only stories
+     * published since today's midnight and falls back to the top results if
+     * no same-day items are present.
+     */
+    public static List<NewsItem> fetchTopNewsOfDay() {
+        List<NewsItem> items = fetchNews("stock market", 12);
+        if (items.isEmpty()) return items;
+
+        java.time.ZoneId zone = java.time.ZoneId.systemDefault();
+        long todayStart = java.time.LocalDate.now(zone)
+                .atStartOfDay(zone)
+                .toEpochSecond();
+
+        List<NewsItem> todayItems = new ArrayList<>();
+        for (NewsItem item : items) {
+            if (item.publishedAt() >= todayStart) {
+                todayItems.add(item);
+            }
+        }
+        return todayItems.isEmpty()
+                ? items.subList(0, Math.min(5, items.size()))
+                : todayItems.subList(0, Math.min(5, todayItems.size()));
+    }
+
+    /**
+     * Fetches rows from one of Yahoo Finance's predefined screeners.
+     *
+     * <p>Examples of screener ids that generally exist are {@code day_gainers},
+     * {@code day_losers}, and {@code most_actives}. Returns an empty list on
+     * any failure so the UI can degrade gracefully.
+     */
+    public static List<ScreenerStock> fetchPredefinedScreener(String screenId, int count) {
+        try {
+            if (sessionCrumb == null) {
+                try { sessionCrumb = fetchNewCrumb(); }
+                catch (Exception ignored) { /* cookie priming is best-effort here */ }
+            }
+            String url = String.format(PREDEFINED_SCREENER_URL,
+                    Math.max(1, count),
+                    java.net.URLEncoder.encode(screenId.trim(),
+                            java.nio.charset.StandardCharsets.UTF_8));
+            HttpResponse<String> response = sendGetRequest(url);
+            if (response.statusCode() == 401) {
+                sessionCrumb = fetchNewCrumb();
+                response = sendGetRequest(url);
+            }
+            if (response.statusCode() != 200) return new ArrayList<>();
+            return parseScreenerStocks(response.body());
         } catch (Exception e) {
             return new ArrayList<>();
         }
@@ -480,11 +549,7 @@ public class YahooFinanceFetcher {
         if (stockData.exchange != null) {
             String upperExchange = stockData.exchange.toUpperCase();
             // Known exchange codes used by Yahoo Finance for NASDAQ and NYSE listings
-            boolean isAcceptedExchange =
-                    upperExchange.contains("NASDAQ") || upperExchange.contains("NMS")
-                    || upperExchange.contains("NYQ")  || upperExchange.contains("NYSE")
-                    || upperExchange.contains("NGM")  || upperExchange.contains("NCM");
-            if (!isAcceptedExchange) {
+            if (!isAcceptedUsExchange(stockData.exchange)) {
                 throw new IOException(
                         "Exchange \"" + stockData.exchange + "\" is not NASDAQ or NYSE.");
             }
@@ -567,6 +632,72 @@ public class YahooFinanceFetcher {
     private static double extractRawDouble(JsonObject obj, String key, double defaultValue) {
         Double value = extractRawDoubleOrNull(obj, key);
         return value != null ? value : defaultValue;
+    }
+
+    /** Returns whether the given Yahoo exchange label represents NASDAQ or NYSE. */
+    private static boolean isAcceptedUsExchange(String exchange) {
+        if (exchange == null) return false;
+        String upperExchange = exchange.toUpperCase();
+        return upperExchange.contains("NASDAQ") || upperExchange.contains("NMS")
+                || upperExchange.contains("NYQ") || upperExchange.contains("NYSE")
+                || upperExchange.contains("NGM") || upperExchange.contains("NCM");
+    }
+
+    /** Parses a predefined-screener response into table-ready row models. */
+    private static List<ScreenerStock> parseScreenerStocks(String responseBody) {
+        List<ScreenerStock> stocks = new ArrayList<>();
+        try {
+            JsonObject root = JsonParser.parseString(responseBody).getAsJsonObject();
+            JsonObject finance = root.getAsJsonObject("finance");
+            if (finance == null || !finance.has("result") || finance.get("result").isJsonNull()) {
+                return stocks;
+            }
+
+            JsonArray resultArray = finance.getAsJsonArray("result");
+            if (resultArray == null || resultArray.size() == 0) return stocks;
+
+            JsonObject result = resultArray.get(0).getAsJsonObject();
+            JsonArray quotes = result.getAsJsonArray("quotes");
+            if (quotes == null) return stocks;
+
+            for (JsonElement element : quotes) {
+                JsonObject quote = element.getAsJsonObject();
+                String symbol = extractString(quote, "symbol");
+                if (symbol == null || symbol.isBlank()) continue;
+
+                String name = extractString(quote, "shortName");
+                if (name == null) name = extractString(quote, "longName");
+                if (name == null) name = symbol;
+
+                String exchange = extractString(quote, "fullExchangeName");
+                if (exchange == null) exchange = extractString(quote, "exchange");
+                if (exchange != null && !isAcceptedUsExchange(exchange)) continue;
+
+                String currency = extractString(quote, "currency");
+                double price = extractRawDouble(quote, "regularMarketPrice", 0.0);
+                double changePercent = extractRawDouble(quote, "regularMarketChangePercent", Double.NaN);
+                double marketCap = extractRawDouble(quote, "marketCap", 0.0);
+                long volume = Math.round(extractRawDouble(quote, "regularMarketVolume", 0.0));
+                Double peRatio = extractRawDoubleOrNull(quote, "trailingPE");
+                Double beta = extractRawDoubleOrNull(quote, "beta");
+                Double dividendYield = extractRawDoubleOrNull(quote, "dividendYield");
+
+                stocks.add(new ScreenerStock(
+                        symbol,
+                        name,
+                        exchange != null ? exchange : "",
+                        currency != null ? currency : "USD",
+                        price,
+                        changePercent,
+                        marketCap,
+                        volume,
+                        peRatio != null ? peRatio : Double.NaN,
+                        beta != null ? beta : Double.NaN,
+                        dividendYield != null ? dividendYield : Double.NaN
+                ));
+            }
+        } catch (Exception ignored) { /* return whatever was collected */ }
+        return stocks;
     }
 
     // =========================================================================
