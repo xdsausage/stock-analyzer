@@ -105,6 +105,14 @@ public class YahooFinanceFetcher {
             "https://query1.finance.yahoo.com/v1/finance/search" +
             "?q=%s&newsCount=8&quotesCount=0";
 
+    /** Options chain endpoint — returns calls/puts for the nearest expiration. */
+    private static final String OPTIONS_URL =
+            "https://query2.finance.yahoo.com/v7/finance/options/%s?crumb=%s";
+
+    /** Options chain endpoint for a specific expiration date (Unix seconds). */
+    private static final String OPTIONS_DATE_URL =
+            "https://query2.finance.yahoo.com/v7/finance/options/%s?date=%d&crumb=%s";
+
     // =========================================================================
     // Session state
     // =========================================================================
@@ -559,6 +567,163 @@ public class YahooFinanceFetcher {
     private static double extractRawDouble(JsonObject obj, String key, double defaultValue) {
         Double value = extractRawDoubleOrNull(obj, key);
         return value != null ? value : defaultValue;
+    }
+
+    // =========================================================================
+    // Public fetch methods — options chain
+    // =========================================================================
+
+    /**
+     * Fetches the options chain for {@code ticker} at the nearest available
+     * expiration date.
+     *
+     * @throws Exception if the network request fails or parsing fails
+     */
+    public static OptionsChain fetchOptions(String ticker) throws Exception {
+        if (sessionCrumb == null) {
+            sessionCrumb = fetchNewCrumb();
+        }
+        String url = String.format(OPTIONS_URL, ticker.trim().toUpperCase(), sessionCrumb);
+        HttpResponse<String> response = sendGetRequest(url);
+        if (response.statusCode() == 401) {
+            sessionCrumb = fetchNewCrumb();
+            url      = String.format(OPTIONS_URL, ticker.trim().toUpperCase(), sessionCrumb);
+            response = sendGetRequest(url);
+        }
+        if (response.statusCode() != 200) {
+            throw new IOException("HTTP " + response.statusCode()
+                    + " fetching options for " + ticker);
+        }
+        return parseOptionsChain(ticker.trim().toUpperCase(), response.body());
+    }
+
+    /**
+     * Fetches the options chain for {@code ticker} filtered to the given
+     * {@code expirationDate} (Unix seconds).
+     *
+     * @throws Exception if the network request fails or parsing fails
+     */
+    public static OptionsChain fetchOptions(String ticker, long expirationDate) throws Exception {
+        if (sessionCrumb == null) {
+            sessionCrumb = fetchNewCrumb();
+        }
+        String url = String.format(OPTIONS_DATE_URL, ticker.trim().toUpperCase(),
+                expirationDate, sessionCrumb);
+        HttpResponse<String> response = sendGetRequest(url);
+        if (response.statusCode() == 401) {
+            sessionCrumb = fetchNewCrumb();
+            url      = String.format(OPTIONS_DATE_URL, ticker.trim().toUpperCase(),
+                    expirationDate, sessionCrumb);
+            response = sendGetRequest(url);
+        }
+        if (response.statusCode() != 200) {
+            throw new IOException("HTTP " + response.statusCode()
+                    + " fetching options for " + ticker);
+        }
+        return parseOptionsChain(ticker.trim().toUpperCase(), response.body());
+    }
+
+    // =========================================================================
+    // JSON parsing — options chain
+    // =========================================================================
+
+    /**
+     * Parses the JSON body of a {@code /v7/finance/options} response into an
+     * {@link OptionsChain} object.
+     *
+     * <p>Expected structure:
+     * <pre>
+     * { "optionChain": { "result": [ {
+     *     "expirationDates": [ ... ],
+     *     "quote": { "regularMarketPrice": ... },
+     *     "options": [ {
+     *         "calls": [ { contractSymbol, strike, lastPrice, ... } ],
+     *         "puts":  [ { ... } ]
+     *     } ]
+     * } ] } }
+     * </pre>
+     */
+    private static OptionsChain parseOptionsChain(String ticker, String body) throws IOException {
+        JsonObject root = JsonParser.parseString(body).getAsJsonObject();
+        JsonObject optionChain = root.getAsJsonObject("optionChain");
+        if (optionChain == null || !optionChain.has("result")
+                || optionChain.get("result").isJsonNull()) {
+            throw new IOException("No options data available for " + ticker);
+        }
+        JsonArray resultArray = optionChain.getAsJsonArray("result");
+        if (resultArray == null || resultArray.size() == 0) {
+            throw new IOException("No options data available for " + ticker);
+        }
+        JsonObject result = resultArray.get(0).getAsJsonObject();
+
+        // Expiration dates
+        long[] expirationDates = new long[0];
+        if (result.has("expirationDates") && !result.get("expirationDates").isJsonNull()) {
+            JsonArray expArr = result.getAsJsonArray("expirationDates");
+            expirationDates = new long[expArr.size()];
+            for (int i = 0; i < expArr.size(); i++) {
+                expirationDates[i] = expArr.get(i).getAsLong();
+            }
+        }
+
+        // Underlying price
+        double underlyingPrice = 0.0;
+        if (result.has("quote") && !result.get("quote").isJsonNull()) {
+            JsonObject quote = result.getAsJsonObject("quote");
+            underlyingPrice = extractRawDouble(quote, "regularMarketPrice", 0.0);
+        }
+
+        // Calls and puts
+        List<OptionsContract> calls = new ArrayList<>();
+        List<OptionsContract> puts  = new ArrayList<>();
+        if (result.has("options") && !result.get("options").isJsonNull()) {
+            JsonArray optionsArr = result.getAsJsonArray("options");
+            if (optionsArr.size() > 0) {
+                JsonObject optionsObj = optionsArr.get(0).getAsJsonObject();
+                if (optionsObj.has("calls") && !optionsObj.get("calls").isJsonNull()) {
+                    for (JsonElement el : optionsObj.getAsJsonArray("calls")) {
+                        OptionsContract c = parseContract(el.getAsJsonObject());
+                        if (c != null) calls.add(c);
+                    }
+                }
+                if (optionsObj.has("puts") && !optionsObj.get("puts").isJsonNull()) {
+                    for (JsonElement el : optionsObj.getAsJsonArray("puts")) {
+                        OptionsContract c = parseContract(el.getAsJsonObject());
+                        if (c != null) puts.add(c);
+                    }
+                }
+            }
+        }
+        return new OptionsChain(ticker, underlyingPrice, expirationDates, calls, puts);
+    }
+
+    /** Parses a single call or put contract JSON object. Returns {@code null} if strike is missing. */
+    private static OptionsContract parseContract(JsonObject obj) {
+        // Skip contracts with no strike
+        if (!obj.has("strike") || obj.get("strike").isJsonNull()) return null;
+        Double strikeVal = extractRawDoubleOrNull(obj, "strike");
+        if (strikeVal == null) return null;
+
+        String contractSymbol  = extractString(obj, "contractSymbol");
+        if (contractSymbol == null) contractSymbol = "";
+        double lastPrice       = extractRawDouble(obj, "lastPrice",        0.0);
+        double bid             = extractRawDouble(obj, "bid",              0.0);
+        double ask             = extractRawDouble(obj, "ask",              0.0);
+        double change          = extractRawDouble(obj, "change",           0.0);
+        double changePercent   = extractRawDouble(obj, "percentChange",    0.0);
+        Double volD            = extractRawDoubleOrNull(obj, "volume");
+        int    volume          = volD != null ? (int) volD.doubleValue() : 0;
+        Double oiD             = extractRawDoubleOrNull(obj, "openInterest");
+        int    openInterest    = oiD  != null ? (int) oiD.doubleValue()  : 0;
+        double impliedVol      = extractRawDouble(obj, "impliedVolatility", 0.0);
+        boolean inTheMoney     = obj.has("inTheMoney")
+                && !obj.get("inTheMoney").isJsonNull()
+                && obj.get("inTheMoney").getAsBoolean();
+        Double expD            = extractRawDoubleOrNull(obj, "expiration");
+        long   expiration      = expD != null ? expD.longValue() : 0L;
+
+        return new OptionsContract(contractSymbol, strikeVal, lastPrice, bid, ask,
+                change, changePercent, volume, openInterest, impliedVol, inTheMoney, expiration);
     }
 
     /**

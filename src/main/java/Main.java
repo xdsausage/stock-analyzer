@@ -11,8 +11,7 @@ import java.io.IOException;
 import java.net.URI;
 import java.text.NumberFormat;
 import java.text.SimpleDateFormat;
-import java.util.ArrayList;
-import java.util.Date;
+import java.util.*;
 import java.util.List;
 import java.util.Locale;
 
@@ -105,17 +104,47 @@ public class Main {
      *   <li>{@code yahooRange}    — total lookback sent to the chart API, e.g. {@code "1mo"}</li>
      * </ul>
      */
+    /**
+     * Supported chart time intervals.  Each row is a 4-tuple:
+     * {@code { buttonLabel, yahooInterval, yahooRange, maxBars }}.
+     * <ul>
+     *   <li>{@code maxBars} — if non-null, the fetched data is trimmed to the
+     *       last {@code maxBars} data points before display.  Used to carve
+     *       intraday windows (e.g. the last 15 minutes) out of a full-day
+     *       1-minute response.</li>
+     * </ul>
+     */
     private static final String[][] CHART_INTERVALS = {
-        {"1D",  "5m",  "1d" },
-        {"5D",  "15m", "5d" },
-        {"1M",  "1d",  "1mo"},
-        {"3M",  "1d",  "3mo"},
-        {"6M",  "1d",  "6mo"},
-        {"1Y",  "1d",  "1y" },
+        {"15M", "1m",  "1d",  "15"},   // last 15 minutes  — 1-min bars
+        {"30M", "1m",  "1d",  "30"},   // last 30 minutes  — 1-min bars
+        {"1H",  "1m",  "1d",  "60"},   // last 1 hour      — 1-min bars
+        {"2H",  "2m",  "1d",  "60"},   // last 2 hours     — 2-min bars (60 × 2m = 120 min)
+        {"1D",  "5m",  "1d",  null},   // full trading day — 5-min bars
+        {"5D",  "15m", "5d",  null},   // 5 days           — 15-min bars
+        {"1M",  "1d",  "1mo", null},   // 1 month          — daily bars
+        {"3M",  "1d",  "3mo", null},
+        {"6M",  "1d",  "6mo", null},
+        {"1Y",  "1d",  "1y",  null},
     };
 
     /** Index into {@link #CHART_INTERVALS} shown by default when a ticker loads. */
-    private static final int DEFAULT_INTERVAL_INDEX = 2; // 1M
+    private static final int DEFAULT_INTERVAL_INDEX = 6; // 1M
+
+    // =========================================================================
+    // Commodities configuration
+    // =========================================================================
+
+    /** Commodity futures tickers and display names shown in the Commodities tab. */
+    private static final String[][] COMMODITIES = {
+        {"GC=F", "Gold"},
+        {"SI=F", "Silver"},
+        {"CL=F", "Crude Oil (WTI)"},
+        {"NG=F", "Natural Gas"},
+        {"ZC=F", "Corn"},
+        {"ZW=F", "Wheat"},
+        {"HG=F", "Copper"},
+        {"KC=F", "Coffee"},
+    };
 
     // =========================================================================
     // UI component references
@@ -212,6 +241,26 @@ public class Main {
     private JPanel           portfolioRowsContainer; // BoxLayout Y panel of position rows
     private JLabel           portfolioTotalLabel;    // shows total value + overall P&L
 
+    // --- Commodities tab -----------------------------------------------------
+
+    private JPanel                commoditiesGrid;         // 4×2 GridLayout, rebuilt on refresh
+    private JLabel                commoditiesLastUpdated;  // "Updated HH:mm:ss"
+    private javax.swing.Timer     commoditiesRefreshTimer; // 60 s auto-refresh
+
+    /** Snapshot of a single commodity's live data used to build a card. */
+    private record CommoditySnapshot(String ticker, String name,
+            double price, double changePercent, double dayHigh, double dayLow,
+            String currency, double[] sparkPrices) {}
+
+    // --- Options tab ---------------------------------------------------------
+
+    private JTextField         optionsTickerField;     // ticker input
+    private JComboBox<String>  expirationCombo;        // populated after load
+    private JPanel             optionsChainContainer;  // BoxLayout Y, holds header + contract rows
+    private JLabel             optionsStatusLabel;     // shows underlying price / error
+    private OptionsChain       currentOptionsChain;    // most recently loaded chain
+    private long               selectedExpiration = 0; // Unix timestamp of chosen expiry
+
     // --- Active chart state ---------------------------------------------------
 
     /**
@@ -231,6 +280,13 @@ public class Main {
      * e.g. {@code "1mo"}.  Updated whenever the user clicks an interval button.
      */
     private String currentTimeRange   = CHART_INTERVALS[DEFAULT_INTERVAL_INDEX][2];
+
+    /**
+     * Maximum number of data points to display for the current interval.
+     * {@code 0} means no limit (show all fetched bars).
+     * Set from the 4th column of {@link #CHART_INTERVALS} for short intraday windows.
+     */
+    private int currentMaxBars = 0;
 
     // =========================================================================
     // Application entry point
@@ -317,6 +373,8 @@ public class Main {
         centerCardPanel.setBackground(DARK_BACKGROUND);
         centerCardPanel.add(resultsScrollPane, "results");
         centerCardPanel.add(buildPortfolioViewPanel(), "portfolio");
+        centerCardPanel.add(buildCommoditiesPanel(), "commodities");
+        centerCardPanel.add(buildOptionsPanel(),     "options");
 
         JPanel centerContainer = new JPanel(new BorderLayout());
         centerContainer.setBackground(DARK_BACKGROUND);
@@ -379,10 +437,21 @@ public class Main {
         JButton backToStocksButton = makeActionButton("\u2190 Stocks");
         backToStocksButton.addActionListener(e -> centerCardLayout.show(centerCardPanel, "results"));
 
+        JButton commoditiesBtn = makeActionButton("\uD83C\uDFED Commodities");
+        commoditiesBtn.addActionListener(e -> {
+            centerCardLayout.show(centerCardPanel, "commodities");
+            refreshCommoditiesInBackground();
+        });
+
+        JButton optionsBtn = makeActionButton("\uD83D\uDCCA Options");
+        optionsBtn.addActionListener(e -> centerCardLayout.show(centerCardPanel, "options"));
+
         JPanel navButtons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 0));
         navButtons.setBackground(DARK_BACKGROUND);
         navButtons.add(backToStocksButton);
         navButtons.add(portfolioButton);
+        navButtons.add(commoditiesBtn);
+        navButtons.add(optionsBtn);
         panel.add(navButtons, BorderLayout.EAST);
 
         return panel;
@@ -415,9 +484,16 @@ public class Main {
         analyzeButton.setFont(new Font("Segoe UI", Font.BOLD, 13));
         analyzeButton.setBackground(ACCENT_COLOR);
         analyzeButton.setForeground(new Color(10, 20, 40));
-        analyzeButton.setBorder(new EmptyBorder(10, 22, 10, 22));
+        analyzeButton.setOpaque(true);
+        analyzeButton.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createLineBorder(new Color(150, 210, 255), 1, true),
+                new EmptyBorder(10, 22, 10, 22)));
         analyzeButton.setFocusPainted(false);
         analyzeButton.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        analyzeButton.addMouseListener(new MouseAdapter() {
+            @Override public void mouseEntered(MouseEvent e) { analyzeButton.setBackground(new Color(140, 210, 255)); }
+            @Override public void mouseExited(MouseEvent e)  { analyzeButton.setBackground(ACCENT_COLOR); }
+        });
         analyzeButton.addActionListener(e -> triggerStockFetch());
 
         panel.add(tickerInputField, BorderLayout.CENTER);
@@ -621,6 +697,8 @@ public class Main {
                 setActiveIntervalButton(btn);
                 currentBarInterval = intervalConfig[1];
                 currentTimeRange   = intervalConfig[2];
+                currentMaxBars     = intervalConfig.length > 3 && intervalConfig[3] != null
+                        ? Integer.parseInt(intervalConfig[3]) : 0;
                 if (currentTicker != null) {
                     triggerChartFetch(currentTicker, intervalConfig[1], intervalConfig[2]);
                 }
@@ -986,17 +1064,37 @@ public class Main {
         return btn;
     }
 
-    /** Creates an "action" button (Watchlist, Export CSV) with a subtle bordered style. */
+    /** Creates an "action" button with a subtle outlined style and hover highlight. */
     private JButton makeActionButton(String label) {
+        Color normalBg  = new Color(35, 35, 60);
+        Color hoverBg   = new Color(55, 60, 100);
+        Color borderNormal = new Color(65, 65, 105);
+        Color borderHover  = ACCENT_COLOR;
+
         JButton btn = new JButton(label);
-        btn.setFont(CAPTION_FONT);
-        btn.setBackground(new Color(40, 40, 65));
+        btn.setFont(new Font("Segoe UI", Font.PLAIN, 12));
+        btn.setBackground(normalBg);
         btn.setForeground(ACCENT_COLOR);
+        btn.setOpaque(true);
         btn.setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createLineBorder(BORDER_COLOR, 1, true),
-                new EmptyBorder(5, 12, 5, 12)));
+                BorderFactory.createLineBorder(borderNormal, 1, true),
+                new EmptyBorder(6, 14, 6, 14)));
         btn.setFocusPainted(false);
         btn.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        btn.addMouseListener(new MouseAdapter() {
+            @Override public void mouseEntered(MouseEvent e) {
+                btn.setBackground(hoverBg);
+                btn.setBorder(BorderFactory.createCompoundBorder(
+                        BorderFactory.createLineBorder(borderHover, 1, true),
+                        new EmptyBorder(6, 14, 6, 14)));
+            }
+            @Override public void mouseExited(MouseEvent e) {
+                btn.setBackground(normalBg);
+                btn.setBorder(BorderFactory.createCompoundBorder(
+                        BorderFactory.createLineBorder(borderNormal, 1, true),
+                        new EmptyBorder(6, 14, 6, 14)));
+            }
+        });
         return btn;
     }
 
@@ -1030,6 +1128,7 @@ public class Main {
         applySelectedIntervalStyle(selectedIntervalBtn);
         currentBarInterval = CHART_INTERVALS[DEFAULT_INTERVAL_INDEX][1];
         currentTimeRange   = CHART_INTERVALS[DEFAULT_INTERVAL_INDEX][2];
+        currentMaxBars     = 0; // default interval (1M) has no bar limit
     }
 
     /**
@@ -1117,7 +1216,9 @@ public class Main {
             @Override
             protected void done() {
                 try {
-                    chartPanel.setChartData(get());
+                    ChartData data = get();
+                    if (currentMaxBars > 0) data = trimChartData(data, currentMaxBars);
+                    chartPanel.setChartData(data);
                     // If a comparison is active, refresh it with the new interval
                     String activatedComparisonTicker = chartPanel.getComparisonTicker();
                     if (activatedComparisonTicker != null) {
@@ -1562,45 +1663,102 @@ public class Main {
     }
 
     /**
-     * Builds a single portfolio position row displaying ticker, shares, average
-     * buy price, current price, market value, gain/loss, and a remove button.
+     * Builds a single portfolio position row.
+     * Open positions show: Ticker | Shares | Avg Buy | Price | Value | Unrealized | Realized | [Sell][×]
+     * Closed positions (sharesOwned == 0) show the realized gain and only the remove button.
      */
     private JPanel buildPortfolioRow(PortfolioManager.PortfolioPosition pos) {
+        boolean closed = pos.sharesOwned <= 0;
+
+        Color rowBg = closed ? new Color(22, 22, 38) : CARD_BACKGROUND;
         JPanel row = new JPanel(new GridLayout(1, 8, 6, 0));
-        row.setBackground(CARD_BACKGROUND);
+        row.setBackground(rowBg);
         row.setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createLineBorder(BORDER_COLOR, 1, true),
+                BorderFactory.createLineBorder(closed ? new Color(40, 40, 60) : BORDER_COLOR, 1, true),
                 new EmptyBorder(10, 12, 10, 12)));
         row.setAlignmentX(Component.LEFT_ALIGNMENT);
         row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 54));
 
-        Color gainOrLoss = pos.unrealizedGain() >= 0 ? GAIN_COLOR : LOSS_COLOR;
-        String gainSign  = pos.unrealizedGain() >= 0 ? "+" : "";
+        // Col 1: Ticker (with CLOSED badge for fully-sold positions)
+        String tickerText = closed ? pos.ticker + "  \u2713CLOSED" : pos.ticker;
+        row.add(makeLabel(tickerText, STAT_VALUE_FONT, closed ? MUTED_TEXT : ACCENT_COLOR));
 
-        row.add(makeLabel(pos.ticker,                                    STAT_VALUE_FONT, ACCENT_COLOR));
-        row.add(makeLabel(String.format("%.4f shs", pos.sharesOwned),    BODY_FONT,       PRIMARY_TEXT));
-        row.add(makeLabel(String.format("$%.2f avg", pos.averageBuyPrice), BODY_FONT,     MUTED_TEXT));
-        row.add(makeLabel(pos.currentPrice == 0 ? "\u2014"
-                : String.format("$%.2f", pos.currentPrice),              BODY_FONT,       PRIMARY_TEXT));
-        row.add(makeLabel(pos.currentPrice == 0 ? "\u2014"
-                : String.format("$%.2f", pos.marketValue()),             BODY_FONT,       PRIMARY_TEXT));
-        row.add(makeLabel(pos.currentPrice == 0 ? "\u2014"
-                : String.format("%s$%.2f", gainSign, pos.unrealizedGain()), BODY_FONT,   gainOrLoss));
-        row.add(makeLabel(pos.currentPrice == 0 ? "\u2014"
-                : String.format("%s%.2f%%", gainSign, pos.unrealizedGainPercent()), BODY_FONT, gainOrLoss));
+        // Col 2: Shares
+        row.add(makeLabel(closed ? "\u2014" : String.format("%.4f shs", pos.sharesOwned),
+                BODY_FONT, PRIMARY_TEXT));
+
+        // Col 3: Avg buy price
+        row.add(makeLabel(String.format("$%.2f avg", pos.averageBuyPrice), BODY_FONT, MUTED_TEXT));
+
+        // Col 4: Current price
+        row.add(makeLabel(closed || pos.currentPrice == 0 ? "\u2014"
+                : String.format("$%.2f", pos.currentPrice), BODY_FONT, PRIMARY_TEXT));
+
+        // Col 5: Market value
+        row.add(makeLabel(closed || pos.currentPrice == 0 ? "\u2014"
+                : String.format("$%.2f", pos.marketValue()), BODY_FONT, PRIMARY_TEXT));
+
+        // Col 6: Unrealized P&L ($ + %)
+        if (closed || pos.currentPrice == 0) {
+            row.add(makeLabel("\u2014", BODY_FONT, MUTED_TEXT));
+        } else {
+            double ug   = pos.unrealizedGain();
+            String sign = ug >= 0 ? "+" : "";
+            Color  col  = ug >= 0 ? GAIN_COLOR : LOSS_COLOR;
+            row.add(makeLabel(String.format("%s$%.2f (%s%.1f%%)",
+                    sign, ug, sign, pos.unrealizedGainPercent()), BODY_FONT, col));
+        }
+
+        // Col 7: Realized P&L (from sells)
+        if (pos.realizedGain == 0) {
+            row.add(makeLabel("\u2014", BODY_FONT, MUTED_TEXT));
+        } else {
+            String sign = pos.realizedGain >= 0 ? "+" : "";
+            Color  col  = pos.realizedGain >= 0 ? GAIN_COLOR : LOSS_COLOR;
+            row.add(makeLabel(String.format("%s$%.2f", sign, pos.realizedGain), BODY_FONT, col));
+        }
+
+        // Col 8: Action buttons — Sell (open positions only) + Remove
+        JPanel actions = new JPanel(new FlowLayout(FlowLayout.RIGHT, 4, 0));
+        actions.setBackground(rowBg);
+
+        if (!closed) {
+            JButton sellBtn = new JButton("Sell");
+            sellBtn.setFont(new Font("Segoe UI", Font.PLAIN, 11));
+            sellBtn.setForeground(new Color(255, 190, 60));
+            sellBtn.setBackground(new Color(50, 38, 20));
+            sellBtn.setOpaque(true);
+            sellBtn.setBorder(BorderFactory.createCompoundBorder(
+                    BorderFactory.createLineBorder(new Color(120, 80, 20), 1, true),
+                    new EmptyBorder(3, 8, 3, 8)));
+            sellBtn.setFocusPainted(false);
+            sellBtn.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+            sellBtn.addMouseListener(new MouseAdapter() {
+                @Override public void mouseEntered(MouseEvent e) { sellBtn.setBackground(new Color(80, 55, 15)); }
+                @Override public void mouseExited(MouseEvent e)  { sellBtn.setBackground(new Color(50, 38, 20)); }
+            });
+            sellBtn.addActionListener(e -> showSellDialog(pos));
+            actions.add(sellBtn);
+        }
 
         JButton removeBtn = new JButton("\u00D7");
         removeBtn.setFont(CAPTION_FONT);
         removeBtn.setForeground(MUTED_TEXT);
-        removeBtn.setBackground(CARD_BACKGROUND);
-        removeBtn.setBorder(new EmptyBorder(2, 6, 2, 2));
+        removeBtn.setBackground(rowBg);
+        removeBtn.setBorder(new EmptyBorder(3, 6, 3, 2));
         removeBtn.setFocusPainted(false);
         removeBtn.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        removeBtn.addMouseListener(new MouseAdapter() {
+            @Override public void mouseEntered(MouseEvent e) { removeBtn.setForeground(LOSS_COLOR); }
+            @Override public void mouseExited(MouseEvent e)  { removeBtn.setForeground(MUTED_TEXT); }
+        });
         removeBtn.addActionListener(e -> {
             portfolioManager.remove(pos.ticker);
             refreshPortfolioView();
         });
-        row.add(removeBtn);
+        actions.add(removeBtn);
+
+        row.add(actions);
         return row;
     }
 
@@ -1615,7 +1773,7 @@ public class Main {
         headers.setBorder(new EmptyBorder(0, 12, 4, 12));
         headers.setAlignmentX(Component.LEFT_ALIGNMENT);
         headers.setMaximumSize(new Dimension(Integer.MAX_VALUE, 24));
-        for (String col : new String[]{"Ticker", "Shares", "Avg Buy", "Price", "Value", "Gain $", "Gain %", ""}) {
+        for (String col : new String[]{"Ticker", "Shares", "Avg Buy", "Price", "Value", "Unrealized", "Realized", ""}) {
             headers.add(makeLabel(col, CAPTION_FONT, MUTED_TEXT));
         }
         portfolioRowsContainer.add(headers);
@@ -1637,12 +1795,14 @@ public class Main {
                 totalGain  += pos.unrealizedGain();
                 totalCost  += pos.sharesOwned * pos.averageBuyPrice;
             }
-            double pct = totalCost > 0 ? totalGain / totalCost * 100 : 0;
+            double totalRealized = portfolioManager.getTotalRealizedGain();
+            double pct  = totalCost > 0 ? totalGain / totalCost * 100 : 0;
             String sign = totalGain >= 0 ? "+" : "";
+            String rSign = totalRealized >= 0 ? "+" : "";
             if (portfolioTotalLabel != null) {
                 portfolioTotalLabel.setText(String.format(
-                        "Total: $%.2f  |  %s$%.2f  (%s%.2f%%)",
-                        totalValue, sign, totalGain, sign, pct));
+                        "Value: $%.2f  |  Unrealized: %s$%.2f (%s%.1f%%)  |  Realized: %s$%.2f",
+                        totalValue, sign, totalGain, sign, pct, rSign, totalRealized));
                 portfolioTotalLabel.setForeground(totalGain >= 0 ? GAIN_COLOR : LOSS_COLOR);
             }
         }
@@ -1685,12 +1845,53 @@ public class Main {
     }
 
     /**
+     * Opens a sell dialog for the given position.  Pre-fills the sell price
+     * with the latest fetched price if available.
+     */
+    private void showSellDialog(PortfolioManager.PortfolioPosition pos) {
+        JTextField sharesField = new JTextField(8);
+        String preFillPrice = pos.currentPrice > 0 ? String.format("%.2f", pos.currentPrice) : "";
+        JTextField priceField  = new JTextField(preFillPrice, 8);
+
+        JPanel form = new JPanel(new GridLayout(4, 2, 8, 6));
+        form.add(new JLabel("Ticker:"));
+        form.add(makeLabel(pos.ticker, BODY_FONT, ACCENT_COLOR));
+        form.add(new JLabel("Shares owned:"));
+        form.add(makeLabel(String.format("%.4f", pos.sharesOwned), BODY_FONT, PRIMARY_TEXT));
+        form.add(new JLabel("Shares to sell:"));
+        form.add(sharesField);
+        form.add(new JLabel("Sell price ($):"));
+        form.add(priceField);
+
+        int result = JOptionPane.showConfirmDialog(mainWindow, form,
+                "Sell Position — " + pos.ticker, JOptionPane.OK_CANCEL_OPTION,
+                JOptionPane.PLAIN_MESSAGE);
+        if (result != JOptionPane.OK_OPTION) return;
+
+        try {
+            double shares    = Double.parseDouble(sharesField.getText().trim());
+            double sellPrice = Double.parseDouble(priceField.getText().trim());
+            if (shares <= 0 || shares > pos.sharesOwned || sellPrice < 0)
+                throw new NumberFormatException();
+            portfolioManager.sell(pos.ticker, shares, sellPrice);
+            refreshPortfolioView();
+            refreshPortfolioPricesInBackground();
+        } catch (NumberFormatException e) {
+            JOptionPane.showMessageDialog(mainWindow,
+                    "Please enter a valid share count (≤ shares owned) and price.",
+                    "Invalid Input", JOptionPane.ERROR_MESSAGE);
+        }
+    }
+
+    /**
      * Fetches the current price for each portfolio position on a background
      * thread, updating {@code currentPrice} on each position, then calls
      * {@link #refreshPortfolioView()} on the EDT.
      */
     private void refreshPortfolioPricesInBackground() {
-        List<PortfolioManager.PortfolioPosition> snapshot = portfolioManager.getPositions();
+        // Only fetch for open positions — closed ones have no live price to show.
+        List<PortfolioManager.PortfolioPosition> snapshot = portfolioManager.getPositions()
+                .stream().filter(p -> p.sharesOwned > 0).collect(java.util.stream.Collectors.toList());
         if (snapshot.isEmpty()) return;
 
         new SwingWorker<Void, PortfolioManager.PortfolioPosition>() {
@@ -1720,6 +1921,456 @@ public class Main {
                 refreshPortfolioView();
             }
         }.execute();
+    }
+
+    // =========================================================================
+    // Commodities panel
+    // =========================================================================
+
+    /** Builds the full Commodities dashboard panel. */
+    private JPanel buildCommoditiesPanel() {
+        JPanel panel = new JPanel(new BorderLayout(0, 8));
+        panel.setBackground(DARK_BACKGROUND);
+        panel.setBorder(new EmptyBorder(16, 0, 8, 0));
+
+        // Header row
+        JPanel header = new JPanel(new BorderLayout(8, 0));
+        header.setBackground(DARK_BACKGROUND);
+        header.setBorder(new EmptyBorder(0, 0, 10, 0));
+        header.add(makeLabel("Commodities", HEADING_FONT, PRIMARY_TEXT), BorderLayout.WEST);
+        commoditiesLastUpdated = makeLabel("", CAPTION_FONT, MUTED_TEXT);
+        commoditiesLastUpdated.setHorizontalAlignment(SwingConstants.CENTER);
+        header.add(commoditiesLastUpdated, BorderLayout.CENTER);
+        JButton refreshBtn = makeActionButton("\u21BB Refresh");
+        refreshBtn.addActionListener(e -> refreshCommoditiesInBackground());
+        header.add(refreshBtn, BorderLayout.EAST);
+        panel.add(header, BorderLayout.NORTH);
+
+        // 4×2 grid of commodity cards
+        commoditiesGrid = new JPanel(new GridLayout(4, 2, 12, 12));
+        commoditiesGrid.setBackground(DARK_BACKGROUND);
+        for (String[] comm : COMMODITIES) {
+            commoditiesGrid.add(buildCommodityCard(null, comm[1]));
+        }
+
+        JScrollPane scroll = new JScrollPane(commoditiesGrid,
+                JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED,
+                JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
+        scroll.setBorder(null);
+        scroll.getViewport().setBackground(DARK_BACKGROUND);
+        scroll.getVerticalScrollBar().setUnitIncrement(16);
+        panel.add(scroll, BorderLayout.CENTER);
+
+        // Start 60-second auto-refresh timer
+        commoditiesRefreshTimer = new javax.swing.Timer(60_000,
+                e -> refreshCommoditiesInBackground());
+        commoditiesRefreshTimer.start();
+
+        return panel;
+    }
+
+    /** Builds a single commodity card. Pass {@code null} snap for a loading placeholder. */
+    private JPanel buildCommodityCard(CommoditySnapshot snap, String displayName) {
+        JPanel card = new JPanel(new BorderLayout(0, 4));
+        card.setBackground(CARD_BACKGROUND);
+        card.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createLineBorder(BORDER_COLOR, 1, true),
+                new EmptyBorder(12, 14, 12, 14)));
+
+        String name = snap != null ? snap.name() : displayName;
+        card.add(makeLabel(name, BODY_FONT, PRIMARY_TEXT), BorderLayout.NORTH);
+
+        String priceText = snap != null ? String.format("%.2f", snap.price()) : "\u2014";
+        card.add(makeLabel(priceText, STAT_VALUE_FONT, PRIMARY_TEXT), BorderLayout.CENTER);
+
+        JPanel southRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        southRow.setBackground(CARD_BACKGROUND);
+        if (snap != null) {
+            String sign = snap.changePercent() >= 0 ? "+" : "";
+            Color chgColor = snap.changePercent() >= 0 ? GAIN_COLOR : LOSS_COLOR;
+            southRow.add(makeLabel(String.format("%s%.2f%%", sign, snap.changePercent()),
+                    CAPTION_FONT, chgColor));
+            southRow.add(makeLabel(String.format("H: %.2f", snap.dayHigh()),
+                    CAPTION_FONT, MUTED_TEXT));
+            southRow.add(makeLabel(String.format("L: %.2f", snap.dayLow()),
+                    CAPTION_FONT, MUTED_TEXT));
+        } else {
+            southRow.add(makeLabel("Loading\u2026", CAPTION_FONT, MUTED_TEXT));
+        }
+        card.add(southRow, BorderLayout.SOUTH);
+
+        if (snap != null && snap.sparkPrices() != null && snap.sparkPrices().length >= 2) {
+            SparklinePanel sparkline = new SparklinePanel();
+            sparkline.setData(snap.sparkPrices());
+            sparkline.setPreferredSize(new Dimension(80, 50));
+            card.add(sparkline, BorderLayout.EAST);
+        }
+
+        return card;
+    }
+
+    /** Fetches live data for all 8 commodities in the background and rebuilds cards. */
+    private void refreshCommoditiesInBackground() {
+        new SwingWorker<Void, CommoditySnapshot>() {
+            @Override
+            protected Void doInBackground() {
+                for (String[] comm : COMMODITIES) {
+                    String ticker = comm[0];
+                    String name   = comm[1];
+                    try {
+                        ChartData cd = YahooFinanceFetcher.fetchChart(ticker, "5m", "1d");
+                        if (cd == null || cd.prices.length < 2) continue;
+                        double[] prices = cd.prices;
+                        double price  = prices[prices.length - 1];
+                        double first  = prices[0];
+                        double changePct = (price - first) / first * 100.0;
+                        double dayHigh  = Arrays.stream(prices).max().orElse(price);
+                        double dayLow   = Arrays.stream(prices).min().orElse(price);
+                        double[] spark  = prices.length > 78
+                                ? Arrays.copyOfRange(prices, prices.length - 78, prices.length)
+                                : prices;
+                        publish(new CommoditySnapshot(ticker, name, price, changePct,
+                                dayHigh, dayLow, "USD", spark));
+                    } catch (Exception ignored) {}
+                }
+                return null;
+            }
+
+            @Override
+            protected void process(List<CommoditySnapshot> snaps) {
+                for (CommoditySnapshot snap : snaps) {
+                    int idx = -1;
+                    for (int i = 0; i < COMMODITIES.length; i++) {
+                        if (COMMODITIES[i][0].equals(snap.ticker())) { idx = i; break; }
+                    }
+                    if (idx < 0 || commoditiesGrid == null) continue;
+                    commoditiesGrid.remove(idx);
+                    commoditiesGrid.add(buildCommodityCard(snap, snap.name()), idx);
+                    commoditiesGrid.revalidate();
+                    commoditiesGrid.repaint();
+                }
+                if (commoditiesLastUpdated != null) {
+                    commoditiesLastUpdated.setText("Updated " +
+                            new SimpleDateFormat("HH:mm:ss").format(new Date()));
+                }
+            }
+
+            @Override
+            protected void done() {
+                if (commoditiesLastUpdated != null) {
+                    commoditiesLastUpdated.setText("Updated " +
+                            new SimpleDateFormat("HH:mm:ss").format(new Date()));
+                }
+            }
+        }.execute();
+    }
+
+    // =========================================================================
+    // Sparkline inner panel
+    // =========================================================================
+
+    private static class SparklinePanel extends JPanel {
+        private double[] prices;
+
+        void setData(double[] prices) {
+            this.prices = prices;
+            repaint();
+        }
+
+        @Override
+        protected void paintComponent(Graphics g) {
+            super.paintComponent(g);
+            if (prices == null || prices.length < 2) return;
+            Graphics2D g2 = (Graphics2D) g;
+            g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+            double min   = Arrays.stream(prices).min().getAsDouble();
+            double max   = Arrays.stream(prices).max().getAsDouble();
+            double range = max - min == 0 ? 1 : max - min;
+            int w = getWidth(), h = getHeight();
+            Color lineColor = prices[prices.length - 1] >= prices[0] ? GAIN_COLOR : LOSS_COLOR;
+            g2.setColor(lineColor);
+            g2.setStroke(new BasicStroke(1.5f));
+            Path2D path = new Path2D.Float();
+            for (int i = 0; i < prices.length; i++) {
+                double x = w * i / (prices.length - 1.0);
+                double y = h - h * (prices[i] - min) / range;
+                if (i == 0) path.moveTo(x, y); else path.lineTo(x, y);
+            }
+            g2.draw(path);
+        }
+    }
+
+    // =========================================================================
+    // Options panel
+    // =========================================================================
+
+    /** Builds the Options chain viewer panel. */
+    private JPanel buildOptionsPanel() {
+        JPanel panel = new JPanel(new BorderLayout(0, 8));
+        panel.setBackground(DARK_BACKGROUND);
+        panel.setBorder(new EmptyBorder(16, 0, 8, 0));
+
+        // Row 1: ticker input + Load button + status label
+        optionsTickerField = new JTextField(8);
+        optionsTickerField.setFont(MONOSPACE_FONT);
+        optionsTickerField.setBackground(CARD_BACKGROUND);
+        optionsTickerField.setForeground(PRIMARY_TEXT);
+        optionsTickerField.setCaretColor(ACCENT_COLOR);
+        optionsTickerField.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createLineBorder(BORDER_COLOR, 1, true),
+                new EmptyBorder(6, 10, 6, 10)));
+        optionsTickerField.putClientProperty("JTextField.placeholderText", "e.g. AAPL");
+
+        JButton loadBtn = makeActionButton("Load Options");
+        loadBtn.addActionListener(e -> {
+            String t = optionsTickerField.getText().trim().toUpperCase();
+            if (!t.isEmpty()) loadOptionsInBackground(t);
+        });
+        optionsTickerField.addActionListener(e -> loadBtn.doClick());
+
+        optionsStatusLabel = makeLabel("Enter a ticker and click Load Options.", CAPTION_FONT, MUTED_TEXT);
+
+        JPanel row1 = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        row1.setBackground(DARK_BACKGROUND);
+        row1.add(optionsTickerField);
+        row1.add(loadBtn);
+        row1.add(optionsStatusLabel);
+
+        // Row 2: expiration picker
+        expirationCombo = new JComboBox<>();
+        expirationCombo.setFont(CAPTION_FONT);
+        expirationCombo.setBackground(CARD_BACKGROUND);
+        expirationCombo.setForeground(PRIMARY_TEXT);
+        expirationCombo.addActionListener(e -> {
+            if (currentOptionsChain == null || expirationCombo.getSelectedIndex() < 0) return;
+            int idx = expirationCombo.getSelectedIndex();
+            if (idx < currentOptionsChain.expirationDates.length) {
+                selectedExpiration = currentOptionsChain.expirationDates[idx];
+                displayOptionsChain(currentOptionsChain, selectedExpiration);
+            }
+        });
+
+        JPanel row2 = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        row2.setBackground(DARK_BACKGROUND);
+        row2.add(makeLabel("Expiration:", CAPTION_FONT, MUTED_TEXT));
+        row2.add(expirationCombo);
+
+        JPanel headerRows = new JPanel(new GridLayout(2, 1, 0, 4));
+        headerRows.setBackground(DARK_BACKGROUND);
+        headerRows.setBorder(new EmptyBorder(0, 0, 8, 0));
+        headerRows.add(row1);
+        headerRows.add(row2);
+        panel.add(headerRows, BorderLayout.NORTH);
+
+        // Chain container (scrollable)
+        optionsChainContainer = new JPanel();
+        optionsChainContainer.setLayout(new BoxLayout(optionsChainContainer, BoxLayout.Y_AXIS));
+        optionsChainContainer.setBackground(DARK_BACKGROUND);
+
+        JScrollPane scroll = new JScrollPane(optionsChainContainer,
+                JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED,
+                JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
+        scroll.setBorder(null);
+        scroll.getViewport().setBackground(DARK_BACKGROUND);
+        scroll.getVerticalScrollBar().setUnitIncrement(16);
+        panel.add(scroll, BorderLayout.CENTER);
+
+        return panel;
+    }
+
+    /** Loads the options chain for {@code ticker} in the background. */
+    private void loadOptionsInBackground(String ticker) {
+        optionsStatusLabel.setText("Loading\u2026");
+        optionsChainContainer.removeAll();
+        optionsChainContainer.revalidate();
+        currentOptionsChain = null;
+
+        new SwingWorker<OptionsChain, Void>() {
+            @Override
+            protected OptionsChain doInBackground() throws Exception {
+                return YahooFinanceFetcher.fetchOptions(ticker);
+            }
+
+            @Override
+            protected void done() {
+                try {
+                    OptionsChain chain = get();
+                    currentOptionsChain = chain;
+                    // Populate expiration combo
+                    expirationCombo.removeAllItems();
+                    SimpleDateFormat sdf = new SimpleDateFormat("MMM dd, yyyy");
+                    for (long exp : chain.expirationDates) {
+                        expirationCombo.addItem(sdf.format(new Date(exp * 1000L)));
+                    }
+                    optionsStatusLabel.setText("Underlying: $"
+                            + String.format("%.2f", chain.underlyingPrice));
+                    optionsStatusLabel.setForeground(PRIMARY_TEXT);
+                    if (chain.expirationDates.length > 0) {
+                        selectedExpiration = chain.expirationDates[0];
+                        displayOptionsChain(chain, selectedExpiration);
+                    }
+                } catch (Exception ex) {
+                    Throwable cause = ex.getCause() != null ? ex.getCause() : ex;
+                    optionsStatusLabel.setText("Error: " + cause.getMessage());
+                    optionsStatusLabel.setForeground(LOSS_COLOR);
+                }
+            }
+        }.execute();
+    }
+
+    /** Renders the options chain for the given expiration date on the EDT. */
+    private void displayOptionsChain(OptionsChain chain, long expiration) {
+        optionsChainContainer.removeAll();
+
+        // Filter to the chosen expiration and sort by strike
+        List<OptionsContract> calls = new ArrayList<>();
+        List<OptionsContract> puts  = new ArrayList<>();
+        for (OptionsContract c : chain.calls) {
+            if (c.expiration() == expiration) calls.add(c);
+        }
+        for (OptionsContract p : chain.puts) {
+            if (p.expiration() == expiration) puts.add(p);
+        }
+        calls.sort(Comparator.comparingDouble(OptionsContract::strike));
+        puts.sort(Comparator.comparingDouble(OptionsContract::strike));
+
+        // Collect all unique strikes
+        TreeSet<Double> strikeSet = new TreeSet<>();
+        calls.forEach(c -> strikeSet.add(c.strike()));
+        puts.forEach(p -> strikeSet.add(p.strike()));
+
+        // Column header row
+        JPanel headerRow = new JPanel(new GridLayout(1, 3, 4, 0));
+        headerRow.setBackground(new Color(22, 22, 38));
+        headerRow.setMaximumSize(new Dimension(Integer.MAX_VALUE, 28));
+        headerRow.setAlignmentX(Component.LEFT_ALIGNMENT);
+        headerRow.setBorder(new EmptyBorder(4, 4, 4, 4));
+
+        JPanel callHeader = new JPanel(new GridLayout(1, 6, 4, 0));
+        callHeader.setBackground(new Color(22, 22, 38));
+        for (String col : new String[]{"Bid", "Ask", "Last", "Vol", "OI", "IV %"}) {
+            JLabel lbl = makeLabel(col, CAPTION_FONT, MUTED_TEXT);
+            lbl.setHorizontalAlignment(SwingConstants.CENTER);
+            callHeader.add(lbl);
+        }
+        JLabel strikeHeader = makeLabel("Strike", CAPTION_FONT, ACCENT_COLOR);
+        strikeHeader.setHorizontalAlignment(SwingConstants.CENTER);
+        JPanel putHeader = new JPanel(new GridLayout(1, 6, 4, 0));
+        putHeader.setBackground(new Color(22, 22, 38));
+        for (String col : new String[]{"IV %", "OI", "Vol", "Last", "Ask", "Bid"}) {
+            JLabel lbl = makeLabel(col, CAPTION_FONT, MUTED_TEXT);
+            lbl.setHorizontalAlignment(SwingConstants.CENTER);
+            putHeader.add(lbl);
+        }
+        headerRow.add(callHeader);
+        headerRow.add(strikeHeader);
+        headerRow.add(putHeader);
+        optionsChainContainer.add(headerRow);
+        optionsChainContainer.add(Box.createVerticalStrut(2));
+
+        // One row per strike
+        for (double strike : strikeSet) {
+            OptionsContract call = calls.stream()
+                    .filter(c -> c.strike() == strike).findFirst().orElse(null);
+            OptionsContract put = puts.stream()
+                    .filter(p -> p.strike() == strike).findFirst().orElse(null);
+            JPanel row = buildOptionsRow(call, strike, put);
+            optionsChainContainer.add(row);
+            optionsChainContainer.add(Box.createVerticalStrut(2));
+        }
+
+        optionsChainContainer.revalidate();
+        optionsChainContainer.repaint();
+    }
+
+    /** Builds a single call | strike | put row for the options chain. */
+    private JPanel buildOptionsRow(OptionsContract call, double strike, OptionsContract put) {
+        Color callBg = (call != null && call.inTheMoney())
+                ? new Color(25, 50, 30) : CARD_BACKGROUND;
+        Color putBg  = (put  != null && put.inTheMoney())
+                ? new Color(50, 25, 25) : CARD_BACKGROUND;
+
+        JPanel callPanel = new JPanel(new GridLayout(1, 6, 4, 0));
+        callPanel.setBackground(callBg);
+        callPanel.setBorder(new EmptyBorder(4, 6, 4, 6));
+        String[] callVals = call == null
+                ? new String[]{"\u2014", "\u2014", "\u2014", "\u2014", "\u2014", "\u2014"}
+                : new String[]{
+                    String.format("$%.2f",    call.bid()),
+                    String.format("$%.2f",    call.ask()),
+                    String.format("$%.2f",    call.lastPrice()),
+                    String.valueOf(call.volume()),
+                    String.valueOf(call.openInterest()),
+                    String.format("%.1f%%",   call.impliedVolatility() * 100)
+                };
+        for (String v : callVals) {
+            JLabel lbl = makeLabel(v, CAPTION_FONT, PRIMARY_TEXT);
+            lbl.setHorizontalAlignment(SwingConstants.CENTER);
+            callPanel.add(lbl);
+        }
+
+        JLabel strikeLabel = makeLabel(String.format("%.2f", strike), CAPTION_FONT, ACCENT_COLOR);
+        strikeLabel.setHorizontalAlignment(SwingConstants.CENTER);
+        strikeLabel.setFont(new Font("Segoe UI", Font.BOLD, 11));
+        JPanel strikePnl = new JPanel(new BorderLayout());
+        strikePnl.setBackground(CARD_BACKGROUND);
+        strikePnl.add(strikeLabel, BorderLayout.CENTER);
+
+        JPanel putPanel = new JPanel(new GridLayout(1, 6, 4, 0));
+        putPanel.setBackground(putBg);
+        putPanel.setBorder(new EmptyBorder(4, 6, 4, 6));
+        String[] putVals = put == null
+                ? new String[]{"\u2014", "\u2014", "\u2014", "\u2014", "\u2014", "\u2014"}
+                : new String[]{
+                    String.format("%.1f%%",  put.impliedVolatility() * 100),
+                    String.valueOf(put.openInterest()),
+                    String.valueOf(put.volume()),
+                    String.format("$%.2f",   put.lastPrice()),
+                    String.format("$%.2f",   put.ask()),
+                    String.format("$%.2f",   put.bid())
+                };
+        for (String v : putVals) {
+            JLabel lbl = makeLabel(v, CAPTION_FONT, PRIMARY_TEXT);
+            lbl.setHorizontalAlignment(SwingConstants.CENTER);
+            putPanel.add(lbl);
+        }
+
+        JPanel row = new JPanel(new GridLayout(1, 3, 4, 0));
+        row.setBackground(CARD_BACKGROUND);
+        row.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createLineBorder(BORDER_COLOR, 1, true),
+                new EmptyBorder(0, 0, 0, 0)));
+        row.setAlignmentX(Component.LEFT_ALIGNMENT);
+        row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 36));
+        row.add(callPanel);
+        row.add(strikePnl);
+        row.add(putPanel);
+        return row;
+    }
+
+    // =========================================================================
+    // Chart data helpers
+    // =========================================================================
+
+    /**
+     * Returns a new {@link ChartData} containing only the last {@code maxBars}
+     * data points from {@code data}.  Used to carve short intraday windows
+     * (e.g. "15M") out of a full-day 1-minute response.
+     *
+     * <p>If {@code data} already has fewer than {@code maxBars} bars, it is
+     * returned unchanged.
+     */
+    private static ChartData trimChartData(ChartData data, int maxBars) {
+        int total = data.timestamps.length;
+        if (total <= maxBars) return data;
+        int start = total - maxBars;
+        long[]   ts  = new long[maxBars];
+        double[] px  = new double[maxBars];
+        long[]   vol = new long[maxBars];
+        System.arraycopy(data.timestamps, start, ts,  0, maxBars);
+        System.arraycopy(data.prices,     start, px,  0, maxBars);
+        System.arraycopy(data.volumes,    start, vol, 0, maxBars);
+        return new ChartData(ts, px, vol);
     }
 
     // =========================================================================

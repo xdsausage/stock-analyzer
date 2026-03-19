@@ -39,12 +39,12 @@ public class PortfolioManager {
      */
     public static class PortfolioPosition implements Serializable {
 
-        private static final long serialVersionUID = 1L;
+        private static final long serialVersionUID = 2L;
 
         /** Upper-case ticker symbol, e.g. "AAPL". */
         public String ticker;
 
-        /** Number of shares held. */
+        /** Number of shares held (0 means the position has been fully sold). */
         public double sharesOwned;
 
         /** Weighted-average purchase price per share in {@link #currency}. */
@@ -52,6 +52,12 @@ public class PortfolioManager {
 
         /** ISO 4217 currency code, e.g. "USD". */
         public String currency;
+
+        /**
+         * Cumulative realised gain/loss from all partial or full sells of this
+         * position.  Persisted so history survives across sessions.
+         */
+        public double realizedGain = 0;
 
         /**
          * Live current price per share — NOT serialised because it changes
@@ -119,6 +125,40 @@ public class PortfolioManager {
         }
         positions.add(new PortfolioPosition(upper, shares, avgBuyPrice, currency));
         save();
+    }
+
+    /**
+     * Records a sell transaction for the given ticker.
+     *
+     * <p>The realised gain/loss ({@code sharesToSell × (sellPrice − avgBuy)}) is
+     * accumulated on the position so the history survives across sessions.
+     * {@code sharesOwned} is reduced accordingly; if it reaches zero the position
+     * is kept as a "closed" record (sharesOwned == 0) so the realised P&L remains
+     * visible — the user can dismiss it manually with the remove button.
+     *
+     * @param ticker       upper-case ticker symbol
+     * @param sharesToSell number of shares being sold (must be ≤ sharesOwned)
+     * @param sellPrice    per-share price at which the shares were sold
+     */
+    public void sell(String ticker, double sharesToSell, double sellPrice) {
+        for (PortfolioPosition pos : positions) {
+            if (pos.ticker.equalsIgnoreCase(ticker)) {
+                double gain = sharesToSell * (sellPrice - pos.averageBuyPrice);
+                pos.realizedGain += gain;
+                pos.sharesOwned  -= sharesToSell;
+                if (pos.sharesOwned < 0) pos.sharesOwned = 0;
+                save();
+                return;
+            }
+        }
+    }
+
+    /**
+     * Returns the sum of all realised gains/losses across every position
+     * (including closed positions still in the list).
+     */
+    public double getTotalRealizedGain() {
+        return positions.stream().mapToDouble(p -> p.realizedGain).sum();
     }
 
     /**
