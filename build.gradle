@@ -16,6 +16,10 @@ java {
     }
 }
 
+// Ensure source files are read as UTF-8 so Unicode characters in comments
+// and string literals are handled correctly on all platforms.
+compileJava.options.encoding = 'UTF-8'
+
 repositories {
     mavenCentral()
 }
