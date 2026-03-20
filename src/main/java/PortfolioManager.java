@@ -26,8 +26,52 @@ public class PortfolioManager {
     private static final String SAVE_FILE =
             System.getProperty("user.dir") + "/portfolio.dat";
 
+    private static final String TX_SAVE_FILE =
+            System.getProperty("user.dir") + "/transactions.dat";
+
     /** In-memory list of portfolio positions. */
     private final List<PortfolioPosition> positions = new ArrayList<>();
+
+    /** Transaction history log. */
+    private final List<TransactionRecord> transactions = new ArrayList<>();
+
+    // =========================================================================
+    // Transaction record
+    // =========================================================================
+
+    public enum TransactionType { BUY, SELL }
+
+    public static class TransactionRecord implements Serializable {
+        private static final long serialVersionUID = 1L;
+        public final TransactionType type;
+        public final String ticker;
+        public final double shares;
+        public final double pricePerShare;
+        public final String currency;
+        public final long timestampMillis;
+
+        public TransactionRecord(TransactionType type, String ticker, double shares,
+                                 double pricePerShare, String currency) {
+            this.type = type;
+            this.ticker = ticker;
+            this.shares = shares;
+            this.pricePerShare = pricePerShare;
+            this.currency = currency;
+            this.timestampMillis = System.currentTimeMillis();
+        }
+    }
+
+    public List<TransactionRecord> getTransactionsForTicker(String ticker) {
+        List<TransactionRecord> result = new ArrayList<>();
+        for (TransactionRecord tx : transactions) {
+            if (tx.ticker.equalsIgnoreCase(ticker)) result.add(tx);
+        }
+        return result;
+    }
+
+    public List<TransactionRecord> getAllTransactions() {
+        return new ArrayList<>(transactions);
+    }
 
     // =========================================================================
     // Inner model class
@@ -113,18 +157,21 @@ public class PortfolioManager {
         String upper = ticker.trim().toUpperCase();
         for (PortfolioPosition pos : positions) {
             if (pos.ticker.equalsIgnoreCase(upper)) {
-                // Weighted average cost: combine existing and new cost bases
                 double totalCost   = pos.sharesOwned * pos.averageBuyPrice
                                    + shares        * avgBuyPrice;
                 pos.sharesOwned   += shares;
                 pos.averageBuyPrice = totalCost / pos.sharesOwned;
                 if (currency != null) pos.currency = currency;
                 save();
+                transactions.add(new TransactionRecord(TransactionType.BUY, upper, shares, avgBuyPrice, currency));
+                saveTransactions();
                 return;
             }
         }
         positions.add(new PortfolioPosition(upper, shares, avgBuyPrice, currency));
         save();
+        transactions.add(new TransactionRecord(TransactionType.BUY, upper, shares, avgBuyPrice, currency));
+        saveTransactions();
     }
 
     /**
@@ -148,6 +195,9 @@ public class PortfolioManager {
                 pos.sharesOwned  -= sharesToSell;
                 if (pos.sharesOwned < 0) pos.sharesOwned = 0;
                 save();
+                transactions.add(new TransactionRecord(TransactionType.SELL, ticker.toUpperCase(),
+                        sharesToSell, sellPrice, pos.currency));
+                saveTransactions();
                 return;
             }
         }
@@ -210,6 +260,30 @@ public class PortfolioManager {
             positions.addAll(saved);
         } catch (Exception e) {
             System.err.println("[PortfolioManager] Failed to load: " + e.getMessage());
+        }
+        loadTransactions();
+    }
+
+    private void saveTransactions() {
+        try (ObjectOutputStream out =
+                     new ObjectOutputStream(new FileOutputStream(TX_SAVE_FILE))) {
+            out.writeObject(new ArrayList<>(transactions));
+        } catch (IOException e) {
+            System.err.println("[PortfolioManager] Failed to save transactions: " + e.getMessage());
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private void loadTransactions() {
+        File txFile = new File(TX_SAVE_FILE);
+        if (!txFile.exists()) return;
+        try (ObjectInputStream in =
+                     new ObjectInputStream(new FileInputStream(txFile))) {
+            List<TransactionRecord> saved = (List<TransactionRecord>) in.readObject();
+            transactions.clear();
+            transactions.addAll(saved);
+        } catch (Exception e) {
+            System.err.println("[PortfolioManager] Failed to load transactions: " + e.getMessage());
         }
     }
 }

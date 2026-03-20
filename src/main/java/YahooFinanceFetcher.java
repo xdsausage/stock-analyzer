@@ -118,6 +118,19 @@ public class YahooFinanceFetcher {
     private static final String OPTIONS_DATE_URL =
             "https://query2.finance.yahoo.com/v7/finance/options/%s?date=%d&crumb=%s";
 
+    /**
+     * quoteSummary endpoint requesting calendarEvents + price modules —
+     * returns upcoming earnings date, EPS estimates, and company name.
+     * Format args: (1) ticker symbol, (2) crumb token.
+     */
+    private static final String EARNINGS_CALENDAR_URL =
+            "https://query1.finance.yahoo.com/v10/finance/quoteSummary/%s" +
+            "?modules=calendarEvents,price&crumb=%s";
+
+    private static final String DIVIDEND_CALENDAR_URL =
+            "https://query1.finance.yahoo.com/v10/finance/quoteSummary/%s" +
+            "?modules=calendarEvents,summaryDetail,price&crumb=%s";
+
     // =========================================================================
     // Session state
     // =========================================================================
@@ -127,6 +140,13 @@ public class YahooFinanceFetcher {
      * Re-fetched automatically when the server returns HTTP 401.
      */
     private static String sessionCrumb = null;
+    private static final Object CRUMB_LOCK = new Object();
+
+    private static final String SECTOR_INFO_URL =
+            "https://query1.finance.yahoo.com/v10/finance/quoteSummary/%s" +
+            "?modules=assetProfile&crumb=%s";
+
+    public record SectorInfo(String sector, String industry) {}
 
     // =========================================================================
     // Public fetch methods
@@ -151,8 +171,10 @@ public class YahooFinanceFetcher {
         }
 
         // Ensure we have a valid session crumb before making the real request
-        if (sessionCrumb == null) {
-            sessionCrumb = fetchNewCrumb();
+        synchronized (CRUMB_LOCK) {
+            if (sessionCrumb == null) {
+                sessionCrumb = fetchNewCrumb();
+            }
         }
 
         HttpResponse<String> response =
@@ -160,7 +182,7 @@ public class YahooFinanceFetcher {
 
         // 401 means our crumb/session expired — refresh and retry once
         if (response.statusCode() == 401) {
-            sessionCrumb = fetchNewCrumb();
+            synchronized (CRUMB_LOCK) { sessionCrumb = fetchNewCrumb(); }
             response = sendGetRequest(String.format(QUOTE_SUMMARY_URL, upperTicker, sessionCrumb));
         }
 
@@ -170,6 +192,31 @@ public class YahooFinanceFetcher {
         }
 
         return parseStockData(upperTicker, response.body());
+    }
+
+    public static SectorInfo fetchSectorInfo(String ticker) {
+        try {
+            synchronized (CRUMB_LOCK) {
+                if (sessionCrumb == null) sessionCrumb = fetchNewCrumb();
+            }
+            String url = String.format(SECTOR_INFO_URL, ticker.trim().toUpperCase(), sessionCrumb);
+            HttpResponse<String> resp = sendGetRequest(url);
+            if (resp.statusCode() == 401) {
+                synchronized (CRUMB_LOCK) { sessionCrumb = fetchNewCrumb(); }
+                url = String.format(SECTOR_INFO_URL, ticker.trim().toUpperCase(), sessionCrumb);
+                resp = sendGetRequest(url);
+            }
+            if (resp.statusCode() != 200) return new SectorInfo("Unknown", "Unknown");
+            JsonObject root = JsonParser.parseString(resp.body()).getAsJsonObject();
+            JsonObject profile = root.getAsJsonObject("quoteSummary")
+                    .getAsJsonArray("result").get(0).getAsJsonObject()
+                    .getAsJsonObject("assetProfile");
+            String sector = profile.has("sector") ? profile.get("sector").getAsString() : "Unknown";
+            String industry = profile.has("industry") ? profile.get("industry").getAsString() : "Unknown";
+            return new SectorInfo(sector, industry);
+        } catch (Exception e) {
+            return new SectorInfo("Unknown", "Unknown");
+        }
     }
 
     /**
@@ -826,6 +873,199 @@ public class YahooFinanceFetcher {
             }
         }
         return new OptionsChain(ticker, underlyingPrice, expirationDates, calls, puts);
+    }
+
+    // =========================================================================
+    // Public fetch methods — earnings calendar
+    // =========================================================================
+
+    /**
+     * Fetches upcoming earnings information for each ticker in {@code tickers}.
+     *
+     * <p>Calls {@code /v10/finance/quoteSummary} with modules {@code calendarEvents}
+     * and {@code price} for each ticker.  Tickers with no upcoming earnings date
+     * or that fail to fetch are silently skipped.
+     *
+     * <p>Never throws — any individual ticker failure is swallowed so the caller
+     * gets back as many entries as could be retrieved.
+     *
+     * @param tickers list of upper-case ticker symbols
+     * @return list of {@link EarningsEntry} records, possibly empty
+     */
+    public static List<EarningsEntry> fetchEarningsCalendar(List<String> tickers) {
+        List<EarningsEntry> entries = new ArrayList<>();
+        for (String ticker : tickers) {
+            try {
+                if (sessionCrumb == null) sessionCrumb = fetchNewCrumb();
+                String url = String.format(EARNINGS_CALENDAR_URL,
+                        ticker.trim().toUpperCase(), sessionCrumb);
+                HttpResponse<String> response = sendGetRequest(url);
+                if (response.statusCode() == 401) {
+                    sessionCrumb = fetchNewCrumb();
+                    url      = String.format(EARNINGS_CALENDAR_URL,
+                            ticker.trim().toUpperCase(), sessionCrumb);
+                    response = sendGetRequest(url);
+                }
+                if (response.statusCode() != 200) continue;
+                EarningsEntry entry = parseEarningsEntry(ticker.trim().toUpperCase(), response.body());
+                if (entry != null) entries.add(entry);
+            } catch (Exception ignored) { /* skip this ticker */ }
+        }
+        return entries;
+    }
+
+    // =========================================================================
+    // JSON parsing — earnings calendar
+    // =========================================================================
+
+    /**
+     * Parses the JSON body of a {@code /v10/finance/quoteSummary} response
+     * (modules {@code calendarEvents} and {@code price}) into an
+     * {@link EarningsEntry}.
+     *
+     * <p>Returns {@code null} if no earnings date is present in the response.
+     *
+     * <p>Expected calendarEvents structure:
+     * <pre>
+     * "calendarEvents": {
+     *   "earnings": {
+     *     "earningsDate":     [{"raw": 1712000000, "fmt": "2024-04-01"}],
+     *     "earningsCallTime": "BMO",
+     *     "epsEstimate":      {"raw": 1.50},
+     *     "epsActual":        {"raw": 1.65}   // absent until reported
+     *   }
+     * }
+     * </pre>
+     */
+    private static EarningsEntry parseEarningsEntry(String ticker, String body) {
+        try {
+            JsonObject root        = JsonParser.parseString(body).getAsJsonObject();
+            JsonObject quoteSummary = root.getAsJsonObject("quoteSummary");
+            if (quoteSummary == null || !quoteSummary.has("result")
+                    || quoteSummary.get("result").isJsonNull()) return null;
+
+            JsonObject result = quoteSummary.getAsJsonArray("result").get(0).getAsJsonObject();
+
+            // --- Company name from the price module ---
+            String companyName = ticker;
+            if (result.has("price") && !result.get("price").isJsonNull()) {
+                JsonObject priceModule = result.getAsJsonObject("price");
+                String longName  = extractString(priceModule, "longName");
+                String shortName = extractString(priceModule, "shortName");
+                if      (longName  != null && !longName.isBlank())  companyName = longName;
+                else if (shortName != null && !shortName.isBlank()) companyName = shortName;
+            }
+
+            // --- calendarEvents module ---
+            JsonObject calEvents = result.getAsJsonObject("calendarEvents");
+            if (calEvents == null) return null;
+            JsonObject earnings = calEvents.getAsJsonObject("earnings");
+            if (earnings == null) return null;
+
+            // Earnings date — array because Yahoo sometimes returns a range
+            long earningsDate = 0;
+            if (earnings.has("earningsDate") && !earnings.get("earningsDate").isJsonNull()) {
+                JsonArray datesArr = earnings.getAsJsonArray("earningsDate");
+                if (datesArr != null && datesArr.size() > 0) {
+                    JsonElement first = datesArr.get(0);
+                    if (first.isJsonObject()) {
+                        JsonElement rawEl = first.getAsJsonObject().get("raw");
+                        if (rawEl != null && !rawEl.isJsonNull()) {
+                            earningsDate = rawEl.getAsLong();
+                        }
+                    } else if (first.isJsonPrimitive()) {
+                        earningsDate = first.getAsLong();
+                    }
+                }
+            }
+            if (earningsDate == 0) return null; // no date available
+
+            // Earnings call time (BMO / AMC)
+            String earningsTime = extractString(earnings, "earningsCallTime");
+            if (earningsTime == null || earningsTime.isBlank()) earningsTime = "\u2014";
+
+            // EPS estimate and actual (may be absent)
+            Double epsEstimate = extractRawDoubleOrNull(earnings, "epsEstimate");
+            Double epsActual   = extractRawDoubleOrNull(earnings, "epsActual");
+
+            return new EarningsEntry(
+                    ticker,
+                    companyName,
+                    earningsDate,
+                    earningsTime,
+                    epsEstimate != null ? epsEstimate : Double.NaN,
+                    epsActual   != null ? epsActual   : Double.NaN);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    public static List<DividendEntry> fetchDividendCalendar(List<String> tickers) {
+        List<DividendEntry> entries = new ArrayList<>();
+        for (String ticker : tickers) {
+            try {
+                if (sessionCrumb == null) sessionCrumb = fetchNewCrumb();
+                String url = String.format(DIVIDEND_CALENDAR_URL, ticker.trim().toUpperCase(), sessionCrumb);
+                HttpResponse<String> response = sendGetRequest(url);
+                if (response.statusCode() == 401) {
+                    sessionCrumb = fetchNewCrumb();
+                    url = String.format(DIVIDEND_CALENDAR_URL, ticker.trim().toUpperCase(), sessionCrumb);
+                    response = sendGetRequest(url);
+                }
+                if (response.statusCode() != 200) continue;
+                DividendEntry entry = parseDividendEntry(ticker.trim().toUpperCase(), response.body());
+                if (entry != null) entries.add(entry);
+            } catch (Exception ignored) {}
+        }
+        return entries;
+    }
+
+    private static DividendEntry parseDividendEntry(String ticker, String body) {
+        try {
+            JsonObject root = JsonParser.parseString(body).getAsJsonObject();
+            JsonObject qs = root.getAsJsonObject("quoteSummary");
+            if (qs == null || !qs.has("result") || qs.get("result").isJsonNull()) return null;
+            JsonObject result = qs.getAsJsonArray("result").get(0).getAsJsonObject();
+
+            String companyName = ticker;
+            if (result.has("price") && !result.get("price").isJsonNull()) {
+                JsonObject priceModule = result.getAsJsonObject("price");
+                String ln = extractString(priceModule, "longName");
+                String sn = extractString(priceModule, "shortName");
+                if (ln != null && !ln.isBlank()) companyName = ln;
+                else if (sn != null && !sn.isBlank()) companyName = sn;
+            }
+
+            long exDivDate = 0;
+            if (result.has("calendarEvents") && !result.get("calendarEvents").isJsonNull()) {
+                JsonObject cal = result.getAsJsonObject("calendarEvents");
+                if (cal.has("exDividendDate") && !cal.get("exDividendDate").isJsonNull()) {
+                    JsonElement el = cal.get("exDividendDate");
+                    if (el.isJsonObject()) {
+                        JsonElement raw = el.getAsJsonObject().get("raw");
+                        if (raw != null && !raw.isJsonNull()) exDivDate = raw.getAsLong();
+                    } else if (el.isJsonPrimitive()) {
+                        try { exDivDate = el.getAsLong(); } catch (Exception ignored) {}
+                    }
+                }
+            }
+            if (exDivDate == 0) return null;
+
+            double dividendAmount = 0, dividendYield = 0;
+            String frequency = "\u2014";
+            if (result.has("summaryDetail") && !result.get("summaryDetail").isJsonNull()) {
+                JsonObject sd = result.getAsJsonObject("summaryDetail");
+                dividendAmount = extractRawDouble(sd, "dividendRate", 0.0);
+                dividendYield  = extractRawDouble(sd, "dividendYield", 0.0) * 100.0;
+                double freqVal = extractRawDouble(sd, "dividendFrequency", 0.0);
+                frequency = freqVal == 4 ? "Quarterly" : freqVal == 12 ? "Monthly"
+                        : freqVal == 2 ? "Semi-Annual" : freqVal == 1 ? "Annual" : "\u2014";
+            }
+
+            return new DividendEntry(ticker, companyName, exDivDate, dividendAmount, dividendYield, frequency);
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     /** Parses a single call or put contract JSON object. Returns {@code null} if strike is missing. */

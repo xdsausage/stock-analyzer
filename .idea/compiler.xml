@@ -4,6 +4,7 @@
     <bytecodeTargetLevel>
       <module name="com.stockanalyzer.TestingSomething" target="17" />
       <module name="com.stockanalyzer.TestingSomething.main" target="17" />
+      <module name="com.stockanalyzer.TestingSomething.test" target="17" />
     </bytecodeTargetLevel>
   </component>
 </project>
