@@ -68,6 +68,35 @@ public class Main {
     /** Monospace font used in ticker input fields for clarity. */
     private static final Font MONOSPACE_FONT    = new Font("Consolas", Font.PLAIN, 13);
 
+    /** Standard font for action/interval buttons. */
+    private static final Font BUTTON_FONT       = new Font("Segoe UI", Font.PLAIN, 12);
+
+    /** Bold font for primary action buttons (e.g. Analyze). */
+    private static final Font BUTTON_BOLD_FONT  = new Font("Segoe UI", Font.BOLD, 13);
+
+    /** Bold caption font for small labels on coloured backgrounds. */
+    private static final Font CAPTION_BOLD_FONT = new Font("Segoe UI", Font.BOLD, 11);
+
+    // --- Layout spacing constants --------------------------------------------
+
+    /** Vertical gap between major sections (e.g. chart card → notes card). */
+    private static final int SECTION_GAP      = 12;
+
+    /** Vertical gap between cards within a section (e.g. between stat rows). */
+    private static final int CARD_GAP          = 8;
+
+    /** Vertical inner padding inside cards. */
+    private static final int CARD_PADDING_V    = 12;
+
+    /** Horizontal inner padding inside cards. */
+    private static final int CARD_PADDING_H    = 14;
+
+    /** Top padding for tab content areas. */
+    private static final int PAGE_PADDING_TOP  = 16;
+
+    /** Gap below section headers before content begins. */
+    private static final int HEADER_BOTTOM_GAP = 12;
+
     // =========================================================================
     // Chart interval configuration
     // =========================================================================
@@ -182,25 +211,51 @@ public class Main {
         Color mutedText, Color gain, Color loss, Color border,
         Color btnBg, Color btnBorder, Color btnHoverBg, Color btnHoverBorder,
         Color volumeBar, Color btnFlatBorder,
-        Color priceLineColor, Color ma20Color, Color ma50Color, Color comparisonLineColor
+        Color priceLineColor, Color ma20Color, Color ma50Color, Color comparisonLineColor,
+        /** Background for selected rows/items in lists, tables, and combo boxes. */
+        Color selectionBg,
+        /** Background applied to rows and cards when the mouse hovers over them. */
+        Color rowHoverBg
     ) {}
 
     private static final ThemeColors DARK_THEME = new ThemeColors(
-        new Color(18,18,28), new Color(28,28,44), new Color(99,179,237),
-        new Color(240,240,255), new Color(140,140,170),
-        new Color(72,199,142), new Color(252,100,100), new Color(50,50,75),
-        new Color(10,10,10), new Color(55,55,55), new Color(30,30,30), new Color(100,100,100),
-        new Color(99,179,237,55), new Color(45,45,45),
-        new Color(120,200,255), new Color(255,165,0), new Color(180,100,255), new Color(255,200,50)
+        new Color(18,18,28),       // background
+        new Color(28,28,44),       // card
+        new Color(99,179,237),     // accent
+        new Color(240,240,255),    // primaryText
+        new Color(140,140,170),    // mutedText
+        new Color(72,199,142),     // gain
+        new Color(252,100,100),    // loss
+        new Color(50,50,75),       // border
+        new Color(36,36,56),       // btnBg         — subtle, matches dark-blue palette
+        new Color(56,56,82),       // btnBorder     — visible but not harsh
+        new Color(46,48,72),       // btnHoverBg    — noticeable lift on hover
+        new Color(80,100,160),     // btnHoverBorder — shifts toward accent blue
+        new Color(99,179,237,55),  // volumeBar
+        new Color(44,44,64),       // btnFlatBorder  — softer for interval/toggle buttons
+        new Color(120,200,255), new Color(255,165,0), new Color(180,100,255), new Color(255,200,50),
+        new Color(42, 60, 96),     // selectionBg
+        new Color(38, 38, 60)      // rowHoverBg
     );
 
     private static final ThemeColors LIGHT_THEME = new ThemeColors(
-        new Color(242,244,248), new Color(255,255,255), new Color(30,100,195),
-        new Color(20,20,40), new Color(100,100,120),
-        new Color(0,150,80), new Color(200,30,30), new Color(210,215,225),
-        new Color(230,232,238), new Color(190,195,205), new Color(215,218,228), new Color(150,155,170),
-        new Color(30,100,195,55), new Color(190,195,205),
-        new Color(0,80,180), new Color(200,120,0), new Color(130,50,200), new Color(180,140,0)
+        new Color(242,244,248),    // background
+        new Color(255,255,255),    // card
+        new Color(30,100,195),     // accent
+        new Color(20,20,40),       // primaryText
+        new Color(100,100,120),    // mutedText
+        new Color(0,150,80),       // gain
+        new Color(200,30,30),      // loss
+        new Color(210,215,225),    // border
+        new Color(228,230,240),    // btnBg         — very light with blue tint
+        new Color(190,195,210),    // btnBorder     — slightly more visible
+        new Color(215,218,232),    // btnHoverBg    — gentle lift
+        new Color(120,145,195),    // btnHoverBorder — shifts toward accent
+        new Color(30,100,195,55),  // volumeBar
+        new Color(200,204,218),    // btnFlatBorder  — softer for interval/toggle buttons
+        new Color(0,80,180), new Color(200,120,0), new Color(130,50,200), new Color(180,140,0),
+        new Color(195, 215, 245),  // selectionBg
+        new Color(225, 230, 242)   // rowHoverBg
     );
 
     private ThemeColors theme = DARK_THEME;
@@ -214,7 +269,7 @@ public class Main {
 
     private JFrame     mainWindow;
     private JPanel     topBar;              // NORTH panel; alert banner lives here
-    private FadePanel  resultsPanel;        // hidden until a stock is successfully loaded
+    private JPanel     resultsPanel;         // hidden until a stock is successfully loaded
     private JLabel     statusLabel;         // status bar at the bottom of the window
     private SpinnerLabel statusSpinner;     // rotating spinner shown during fetches
 
@@ -422,6 +477,7 @@ public class Main {
     private String                  currentOptionsTicker;
     private long                    selectedExpiration = 0;
     private boolean                 optionsAdjustingExpiration = false;
+    private OptionsPayoffPanel      optionsPayoffPanel;
 
     // --- Crypto tab ----------------------------------------------------------
 
@@ -537,7 +593,7 @@ public class Main {
         Color cardBg = tc.card();
         Color text   = tc.primaryText();
         Color muted  = tc.mutedText();
-        Color sel    = new Color(42, 60, 96);
+        Color sel    = tc.selectionBg();
         Color border = tc.btnBorder();
         Color accent = tc.accent();
         Color tblBg  = tc.background();
@@ -637,7 +693,7 @@ public class Main {
 
         // --- Alert banner (slides in at the very top when a price alert fires) ---
         alertBannerPanel = new JPanel(new BorderLayout());
-        alertBannerPanel.setBackground(new Color(30, 100, 50));
+        alertBannerPanel.setBackground(theme.gain().darker());
         alertBannerPanel.setVisible(false);
         alertBannerPanel.setPreferredSize(new Dimension(0, 0));
         alertBannerLabel = new JLabel("", SwingConstants.CENTER);
@@ -743,7 +799,7 @@ public class Main {
     private JPanel buildHeaderPanel() {
         JPanel panel = new JPanel(new BorderLayout());
         panel.setBackground(theme.background());
-        panel.setBorder(new EmptyBorder(0, 0, 18, 0));
+        panel.setBorder(new EmptyBorder(0, 0, HEADER_BOTTOM_GAP, 0));
 
         JLabel titleLabel    = new JLabel("Stock Analyzer");
         titleLabel.setFont(HEADING_FONT);
@@ -773,17 +829,21 @@ public class Main {
         addNavButton("dividends", "Dividends", this::refreshDividendsInBackground);
         addNavButton("comparison", "Compare", () -> {});
 
-        JButton themeToggleBtn = makeActionButton(isDarkTheme ? "\u2600 Light Mode" : "\uD83C\uDF19 Dark Mode");
+        JButton themeToggleBtn = makeActionButton(isDarkTheme ? "Light Mode" : "Dark Mode");
         themeToggleBtn.setToolTipText("Toggle light/dark theme");
         themeToggleBtn.addActionListener(e -> {
             ThemeColors prevTheme = theme;
             isDarkTheme = !isDarkTheme;
             theme = isDarkTheme ? DARK_THEME : LIGHT_THEME;
-            themeToggleBtn.setText(isDarkTheme ? "\u2600 Light Mode" : "\uD83C\uDF19 Dark Mode");
+            themeToggleBtn.setText(isDarkTheme ? "Light Mode" : "Dark Mode");
             updateUIManagerForTheme(theme);
             applyThemeToAllPanels(mainWindow.getContentPane(), prevTheme);
             // Re-apply active tab style after theme change
             applyActiveTabStyle();
+            // Re-apply selected interval button styles (they use theme-aware colors)
+            if (selectedIntervalBtn != null) applySelectedIntervalStyle(selectedIntervalBtn);
+            if (selectedCommodityIntervalBtn != null) applySelectedIntervalStyle(selectedCommodityIntervalBtn);
+            if (selectedCryptoIntervalBtn != null) applySelectedIntervalStyle(selectedCryptoIntervalBtn);
             SwingUtilities.updateComponentTreeUI(mainWindow);
             mainWindow.repaint();
             saveThemePreference();
@@ -820,25 +880,16 @@ public class Main {
         navButtonMap.put(cardKey, btn);
     }
 
-    private FadePanel wrapInFadePanel(java.awt.Component content) {
-        FadePanel fp = new FadePanel();
-        fp.setLayout(new BorderLayout());
+    private JPanel wrapInFadePanel(java.awt.Component content) {
+        JPanel fp = new JPanel(new BorderLayout());
         fp.setOpaque(false);
         fp.add(content, BorderLayout.CENTER);
-        fp.resetToVisible();
         return fp;
     }
 
     private void setActiveTab(String cardKey) {
         activeCardKey = cardKey;
         centerCardLayout.show(centerCardPanel, cardKey);
-        // Trigger fade-in on the now-visible card
-        for (java.awt.Component comp : centerCardPanel.getComponents()) {
-            if (comp.isVisible() && comp instanceof FadePanel fp) {
-                fp.fadeIn();
-                break;
-            }
-        }
         applyActiveTabStyle();
     }
 
@@ -846,16 +897,17 @@ public class Main {
         for (var entry : navButtonMap.entrySet()) {
             JButton btn = entry.getValue();
             if (entry.getKey().equals(activeCardKey)) {
+                btn.setBackground(theme.btnHoverBg());
+                btn.setForeground(theme.accent());
                 btn.setBorder(BorderFactory.createCompoundBorder(
                         new MatteBorder(0, 0, 2, 0, theme.accent()),
                         new EmptyBorder(6, 14, 4, 14)));
-                btn.setForeground(theme.accent());
             } else {
+                btn.setBackground(theme.btnBg());
+                btn.setForeground(theme.primaryText());
                 btn.setBorder(BorderFactory.createCompoundBorder(
                         BorderFactory.createLineBorder(theme.btnBorder(), 1, true),
                         new EmptyBorder(6, 14, 6, 14)));
-                btn.setForeground(theme.primaryText());
-                btn.setBackground(theme.btnBg());
             }
         }
     }
@@ -876,8 +928,6 @@ public class Main {
             final String cardKey = key;
             am.put("tab_" + key, new AbstractAction() {
                 @Override public void actionPerformed(ActionEvent e) {
-                    setActiveTab(cardKey);
-                    // Trigger refresh for tabs that need it
                     JButton btn = navButtonMap.get(cardKey);
                     if (btn != null) btn.doClick(0);
                 }
@@ -922,7 +972,7 @@ public class Main {
         list.setFont(MONOSPACE_FONT);
         list.setBackground(theme.card());
         list.setForeground(theme.primaryText());
-        list.setSelectionBackground(new Color(42, 60, 96));
+        list.setSelectionBackground(theme.selectionBg());
         JScrollPane sp = new JScrollPane(list);
         sp.setPreferredSize(new Dimension(200, 150));
         sp.setBorder(null);
@@ -993,27 +1043,27 @@ public class Main {
     private JPanel buildSearchBarPanel() {
         JPanel panel = new JPanel(new BorderLayout(10, 0));
         panel.setBackground(theme.background());
-        panel.setBorder(new EmptyBorder(0, 0, 16, 0));
+        panel.setBorder(new EmptyBorder(0, 0, HEADER_BOTTOM_GAP, 0));
 
         tickerInputField = new JTextField();
         tickerInputField.setUI(new javax.swing.plaf.basic.BasicTextFieldUI());
         tickerInputField.setFont(MONOSPACE_FONT);
-        tickerInputField.setBackground(new Color(10, 10, 10));
+        tickerInputField.setBackground(theme.btnBg());
         tickerInputField.setForeground(theme.primaryText());
         tickerInputField.setOpaque(true);
         tickerInputField.setCaretColor(theme.accent());
         tickerInputField.setBorder(BorderFactory.createCompoundBorder(
                 BorderFactory.createLineBorder(theme.border(), 1, true),
-                new EmptyBorder(10, 14, 10, 14)));
+                new EmptyBorder(CARD_PADDING_V, CARD_PADDING_H, CARD_PADDING_V, CARD_PADDING_H)));
         tickerInputField.putClientProperty("JTextField.placeholderText",
                 "Enter ticker, e.g. AAPL");
         tickerInputField.addActionListener(e -> triggerStockFetch()); // Enter key triggers fetch
 
         analyzeButton = new JButton("Analyze");
         analyzeButton.setUI(new javax.swing.plaf.basic.BasicButtonUI());
-        analyzeButton.setFont(new Font("Segoe UI", Font.BOLD, 13));
+        analyzeButton.setFont(BUTTON_BOLD_FONT);
         analyzeButton.setBackground(theme.btnBg());
-        analyzeButton.setForeground(Color.WHITE);
+        analyzeButton.setForeground(theme.primaryText());
         analyzeButton.setOpaque(true);
         analyzeButton.setBorder(BorderFactory.createCompoundBorder(
                 BorderFactory.createLineBorder(theme.btnBorder(), 1, true),
@@ -1048,8 +1098,8 @@ public class Main {
      * chart section.  This panel is constructed once at startup and its child
      * labels are updated in-place by {@link #populateResultsFromStockData}.
      */
-    private FadePanel buildResultsPanel() {
-        FadePanel panel = new FadePanel();
+    private JPanel buildResultsPanel() {
+        JPanel panel = new JPanel();
         panel.setLayout(new BoxLayout(panel, BoxLayout.Y_AXIS));
         panel.setBackground(theme.background());
 
@@ -1087,7 +1137,7 @@ public class Main {
         backRow.setAlignmentX(Component.LEFT_ALIGNMENT);
         backRow.add(newSearchButton);
         panel.add(backRow);
-        panel.add(verticalSpacer(8));
+        panel.add(verticalSpacer(CARD_GAP));
 
         // --- Hero card: company name, price, change, action buttons -----------
         JPanel heroCard = cardPanel(150);
@@ -1113,7 +1163,7 @@ public class Main {
         actionButtonRow.setBackground(theme.card());
         actionButtonRow.setBorder(new EmptyBorder(6, 0, 0, 0));
 
-        addToWatchlistButton = makeActionButton("\u2605 Watchlist");
+        addToWatchlistButton = makeActionButton("+ Watchlist");
         exportCsvButton      = makeActionButton("\u2193 Export CSV");
         addToWatchlistButton.setVisible(false);
         exportCsvButton.setVisible(false);
@@ -1126,7 +1176,7 @@ public class Main {
         heroCard.add(priceRow,       BorderLayout.CENTER);
         heroCard.add(actionButtonRow, BorderLayout.SOUTH);
         panel.add(heroCard);
-        panel.add(verticalSpacer(10));
+        panel.add(verticalSpacer(SECTION_GAP));
 
         // --- Stat cards row 1: market data ------------------------------------
         marketCapLabel      = statValueLabel();
@@ -1137,7 +1187,7 @@ public class Main {
             statCard("Volume",      currentVolumeLabel),
             statCard("Avg Volume",  averageVolumeLabel)
         ));
-        panel.add(verticalSpacer(8));
+        panel.add(verticalSpacer(CARD_GAP));
 
         // --- Stat cards row 2: valuation --------------------------------------
         peRatioLabel   = statValueLabel();
@@ -1148,7 +1198,7 @@ public class Main {
             statCard("Fwd P/E",   forwardPELabel),
             statCard("EPS (TTM)", epsLabel)
         ));
-        panel.add(verticalSpacer(8));
+        panel.add(verticalSpacer(CARD_GAP));
 
         // --- Stat cards row 3: risk & income ----------------------------------
         betaLabel          = statValueLabel();
@@ -1159,7 +1209,7 @@ public class Main {
             statCard("Div Yield",  dividendYieldLabel),
             statCard("Price/Book", priceToBookLabel)
         ));
-        panel.add(verticalSpacer(8));
+        panel.add(verticalSpacer(CARD_GAP));
 
         // --- Stat cards row 4: technicals ------------------------------------
         weekHighLabel         = statValueLabel(theme.gain());
@@ -1172,19 +1222,19 @@ public class Main {
             statCard("50D Avg",   fiftyDayAvgLabel),
             statCard("200D Avg",  twoHundredDayAvgLabel)
         ));
-        panel.add(verticalSpacer(10));
+        panel.add(verticalSpacer(SECTION_GAP));
 
         // --- Chart card -------------------------------------------------------
         panel.add(buildChartCard());
-        panel.add(verticalSpacer(10));
+        panel.add(verticalSpacer(SECTION_GAP));
 
         // --- Stock Notes card -------------------------------------------------
         panel.add(buildStockNotesCard());
-        panel.add(verticalSpacer(10));
+        panel.add(verticalSpacer(SECTION_GAP));
 
         // --- News section (populated asynchronously after each stock fetch) ---
         panel.add(buildNewsSection());
-        panel.add(verticalSpacer(16));
+        panel.add(verticalSpacer(SECTION_GAP));
 
         return panel;
     }
@@ -1195,7 +1245,7 @@ public class Main {
         card.setBackground(theme.card());
         card.setBorder(BorderFactory.createCompoundBorder(
                 BorderFactory.createLineBorder(theme.border(), 1, true),
-                new EmptyBorder(10, 12, 10, 12)));
+                new EmptyBorder(CARD_PADDING_V, CARD_PADDING_H, CARD_PADDING_V, CARD_PADDING_H)));
         card.setAlignmentX(Component.LEFT_ALIGNMENT);
 
         JPanel headerRow = new JPanel(new BorderLayout());
@@ -1208,12 +1258,12 @@ public class Main {
 
         stockNotesArea = new JTextArea(5, 0);
         stockNotesArea.setFont(BODY_FONT);
-        stockNotesArea.setBackground(new Color(12, 12, 22));
+        stockNotesArea.setBackground(theme.background());
         stockNotesArea.setForeground(theme.primaryText());
         stockNotesArea.setCaretColor(theme.accent());
         stockNotesArea.setLineWrap(true);
         stockNotesArea.setWrapStyleWord(true);
-        stockNotesArea.setBorder(new EmptyBorder(8, 10, 8, 10));
+        stockNotesArea.setBorder(new EmptyBorder(CARD_GAP, CARD_PADDING_H, CARD_GAP, CARD_PADDING_H));
         stockNotesArea.addFocusListener(new java.awt.event.FocusAdapter() {
             @Override public void focusLost(java.awt.event.FocusEvent e) {
                 saveCurrentNotes();
@@ -1232,7 +1282,7 @@ public class Main {
                 JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED,
                 JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
         notesScroll.setBorder(BorderFactory.createLineBorder(theme.border(), 1, true));
-        notesScroll.getViewport().setBackground(new Color(12, 12, 22));
+        notesScroll.getViewport().setBackground(theme.background());
 
         card.add(headerRow,   BorderLayout.NORTH);
         card.add(notesScroll, BorderLayout.CENTER);
@@ -1248,7 +1298,7 @@ public class Main {
         chartCard.setBackground(theme.card());
         chartCard.setBorder(BorderFactory.createCompoundBorder(
                 BorderFactory.createLineBorder(theme.border(), 1, true),
-                new EmptyBorder(10, 12, 10, 12)));
+                new EmptyBorder(CARD_PADDING_V, CARD_PADDING_H, CARD_PADDING_V, CARD_PADDING_H)));
         chartCard.setAlignmentX(Component.LEFT_ALIGNMENT);
 
         // --- Comparison ticker row -------------------------------------------
@@ -1259,7 +1309,7 @@ public class Main {
         comparisonTickerField = new JTextField(8);
         comparisonTickerField.setUI(new javax.swing.plaf.basic.BasicTextFieldUI());
         comparisonTickerField.setFont(MONOSPACE_FONT);
-        comparisonTickerField.setBackground(new Color(10, 10, 10));
+        comparisonTickerField.setBackground(theme.btnBg());
         comparisonTickerField.setForeground(theme.primaryText());
         comparisonTickerField.setOpaque(true);
         comparisonTickerField.setCaretColor(theme.accent());
@@ -1270,12 +1320,30 @@ public class Main {
         comparisonTickerField.addActionListener(e -> triggerComparisonChartFetch());
 
         JButton clearComparisonButton = new JButton("Clear");
+        clearComparisonButton.setUI(new javax.swing.plaf.basic.BasicButtonUI());
         clearComparisonButton.setFont(CAPTION_FONT);
-        clearComparisonButton.setBackground(theme.background());
-        clearComparisonButton.setForeground(theme.mutedText());
-        clearComparisonButton.setBorder(new EmptyBorder(4, 10, 4, 10));
+        clearComparisonButton.setBackground(theme.btnBg());
+        clearComparisonButton.setForeground(theme.primaryText());
+        clearComparisonButton.setOpaque(true);
+        clearComparisonButton.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createLineBorder(theme.btnBorder(), 1, true),
+                new EmptyBorder(4, 10, 4, 10)));
         clearComparisonButton.setFocusPainted(false);
         clearComparisonButton.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        clearComparisonButton.addMouseListener(new MouseAdapter() {
+            @Override public void mouseEntered(MouseEvent e) {
+                clearComparisonButton.setBackground(theme.btnHoverBg());
+                clearComparisonButton.setBorder(BorderFactory.createCompoundBorder(
+                        BorderFactory.createLineBorder(theme.btnHoverBorder(), 1, true),
+                        new EmptyBorder(4, 10, 4, 10)));
+            }
+            @Override public void mouseExited(MouseEvent e) {
+                clearComparisonButton.setBackground(theme.btnBg());
+                clearComparisonButton.setBorder(BorderFactory.createCompoundBorder(
+                        BorderFactory.createLineBorder(theme.btnBorder(), 1, true),
+                        new EmptyBorder(4, 10, 4, 10)));
+            }
+        });
         clearComparisonButton.addActionListener(e -> {
             comparisonTickerField.setText("");
             chartPanel.clearComparison();
@@ -1357,12 +1425,12 @@ public class Main {
         watchlistSidebar.setBackground(theme.background());
         watchlistSidebar.setPreferredSize(new Dimension(210, 0));
 
-        // Toggle button for collapsing
-        sidebarToggleBtn = new JButton("\u25B6");
+        // Toggle button — lives permanently in NORTH of watchlistSidebar
+        sidebarToggleBtn = new JButton(">");
         sidebarToggleBtn.setUI(new javax.swing.plaf.basic.BasicButtonUI());
         sidebarToggleBtn.setFont(CAPTION_FONT);
-        sidebarToggleBtn.setBackground(theme.background());
-        sidebarToggleBtn.setForeground(theme.mutedText());
+        sidebarToggleBtn.setBackground(theme.btnBg());
+        sidebarToggleBtn.setForeground(theme.primaryText());
         sidebarToggleBtn.setOpaque(true);
         sidebarToggleBtn.setBorder(new EmptyBorder(4, 4, 4, 4));
         sidebarToggleBtn.setFocusPainted(false);
@@ -1370,16 +1438,21 @@ public class Main {
         sidebarToggleBtn.setToolTipText("Collapse/expand watchlist (Ctrl+W)");
         sidebarToggleBtn.addActionListener(e -> toggleSidebar());
 
+        // Permanent north strip — always visible regardless of collapse state
+        JPanel collapseRow = new JPanel(new BorderLayout());
+        collapseRow.setBackground(theme.background());
+        collapseRow.add(sidebarToggleBtn, BorderLayout.EAST);
+        watchlistSidebar.add(collapseRow, BorderLayout.NORTH);
+
         // Sidebar content
-        sidebarContent = new JPanel(new BorderLayout(0, 8));
+        sidebarContent = new JPanel(new BorderLayout(0, CARD_GAP));
         sidebarContent.setBackground(theme.background());
-        sidebarContent.setBorder(new EmptyBorder(0, 12, 0, 8));
+        sidebarContent.setBorder(new EmptyBorder(0, CARD_PADDING_H, 0, CARD_GAP));
 
         JPanel sidebarHeader = new JPanel(new BorderLayout());
         sidebarHeader.setBackground(theme.background());
-        sidebarHeader.setBorder(new EmptyBorder(0, 0, 8, 0));
+        sidebarHeader.setBorder(new EmptyBorder(0, 0, CARD_GAP, 0));
         sidebarHeader.add(makeLabel("Watchlist", STAT_VALUE_FONT, theme.accent()), BorderLayout.WEST);
-        sidebarHeader.add(sidebarToggleBtn, BorderLayout.EAST);
         sidebarContent.add(sidebarHeader, BorderLayout.NORTH);
 
         watchlistItemsContainer = new JPanel();
@@ -1404,24 +1477,13 @@ public class Main {
         if (sidebarCollapsed) {
             sidebarContent.setVisible(false);
             watchlistSidebar.setPreferredSize(new Dimension(32, 0));
-            sidebarToggleBtn.setText("\u25C0");
-            // Move toggle button to the collapsed sidebar itself
-            watchlistSidebar.removeAll();
-            JPanel collapsedPanel = new JPanel(new BorderLayout());
-            collapsedPanel.setBackground(theme.background());
+            sidebarToggleBtn.setText("<");
             sidebarToggleBtn.setToolTipText("Expand watchlist");
-            collapsedPanel.add(sidebarToggleBtn, BorderLayout.NORTH);
-            watchlistSidebar.add(collapsedPanel, BorderLayout.CENTER);
         } else {
-            watchlistSidebar.removeAll();
-            sidebarToggleBtn.setText("\u25B6");
-            sidebarToggleBtn.setToolTipText("Collapse watchlist");
-            // Re-add toggle to the header
-            JPanel header = (JPanel) sidebarContent.getComponent(0);
-            header.add(sidebarToggleBtn, BorderLayout.EAST);
             sidebarContent.setVisible(true);
-            watchlistSidebar.add(sidebarContent, BorderLayout.CENTER);
             watchlistSidebar.setPreferredSize(new Dimension(210, 0));
+            sidebarToggleBtn.setText(">");
+            sidebarToggleBtn.setToolTipText("Collapse watchlist");
         }
         watchlistSidebar.revalidate();
         watchlistSidebar.repaint();
@@ -1462,7 +1524,7 @@ public class Main {
         row.setBackground(theme.card());
         row.setBorder(BorderFactory.createCompoundBorder(
                 BorderFactory.createLineBorder(theme.border(), 1, true),
-                new EmptyBorder(7, 10, 7, 8)));
+                new EmptyBorder(CARD_GAP, CARD_PADDING_H, CARD_GAP, CARD_GAP)));
         row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 54));
         row.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
 
@@ -1496,15 +1558,21 @@ public class Main {
 
         // Bell button — set / clear a price alert for this ticker
         boolean hasAlert = !Double.isNaN(entry.alertPrice);
-        JButton bellButton = new JButton(hasAlert ? "\u25CF" : "\u25CB");
+        JButton bellButton = new JButton(hasAlert ? "!" : "o");
+        bellButton.setUI(new javax.swing.plaf.basic.BasicButtonUI());
         bellButton.setFont(CAPTION_FONT);
         bellButton.setForeground(hasAlert ? theme.gain() : theme.mutedText());
         bellButton.setBackground(theme.card());
+        bellButton.setOpaque(true);
         bellButton.setBorder(new EmptyBorder(2, 4, 2, 2));
         bellButton.setFocusPainted(false);
         bellButton.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        bellButton.addMouseListener(new MouseAdapter() {
+            @Override public void mouseEntered(MouseEvent e) { bellButton.setForeground(theme.accent()); }
+            @Override public void mouseExited(MouseEvent e)  { bellButton.setForeground(!Double.isNaN(entry.alertPrice) ? theme.gain() : theme.mutedText()); }
+        });
         bellButton.setToolTipText(hasAlert
-                ? "Alert set at " + String.format("%.2f", entry.alertPrice) + " — click to clear"
+                ? "Alert set at " + String.format("%.2f", entry.alertPrice) + " \u2014 click to clear"
                 : "Set price alert");
         bellButton.addActionListener(e -> {
             if (!Double.isNaN(entry.alertPrice)) {
@@ -1531,12 +1599,18 @@ public class Main {
 
         // Remove button ("×") — removes this ticker from the watchlist
         JButton removeButton = new JButton("\u00D7");
+        removeButton.setUI(new javax.swing.plaf.basic.BasicButtonUI());
         removeButton.setFont(CAPTION_FONT);
         removeButton.setForeground(theme.mutedText());
         removeButton.setBackground(theme.card());
+        removeButton.setOpaque(true);
         removeButton.setBorder(new EmptyBorder(2, 4, 2, 2));
         removeButton.setFocusPainted(false);
         removeButton.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        removeButton.addMouseListener(new MouseAdapter() {
+            @Override public void mouseEntered(MouseEvent e) { removeButton.setForeground(theme.loss()); }
+            @Override public void mouseExited(MouseEvent e)  { removeButton.setForeground(theme.mutedText()); }
+        });
         removeButton.addActionListener(e -> {
             watchlistManager.remove(entry.ticker);
             rebuildWatchlistRows();
@@ -1560,8 +1634,8 @@ public class Main {
                 triggerStockFetch();
             }
             @Override public void mouseEntered(MouseEvent e) {
-                row.setBackground(new Color(38, 38, 60));
-                priceChangeStack.setBackground(new Color(38, 38, 60));
+                row.setBackground(theme.rowHoverBg());
+                priceChangeStack.setBackground(theme.rowHoverBg());
             }
             @Override public void mouseExited(MouseEvent e) {
                 row.setBackground(theme.card());
@@ -1632,7 +1706,7 @@ public class Main {
 
     /** Creates a row of stat cards with equal widths, capped at 68 px tall. */
     private JPanel statsRow(JPanel... cards) {
-        JPanel row = new JPanel(new GridLayout(1, cards.length, 8, 0));
+        JPanel row = new JPanel(new GridLayout(1, cards.length, CARD_GAP, 0));
         row.setBackground(theme.background());
         row.setAlignmentX(Component.LEFT_ALIGNMENT);
         row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 68));
@@ -1646,7 +1720,7 @@ public class Main {
         card.setBackground(theme.card());
         card.setBorder(BorderFactory.createCompoundBorder(
                 BorderFactory.createLineBorder(theme.border(), 1, true),
-                new EmptyBorder(10, 14, 10, 14)));
+                new EmptyBorder(CARD_PADDING_V, CARD_PADDING_H, CARD_PADDING_V, CARD_PADDING_H)));
         JLabel nameLabel = makeLabel(metricName, CAPTION_FONT, theme.mutedText());
         card.add(nameLabel);
         card.add(valueLabel);
@@ -1654,9 +1728,8 @@ public class Main {
         // Hover highlight — background brightens when the mouse is over the card.
         // The exit check uses the card's screen rectangle to avoid false exits
         // when the cursor moves between the card panel and its child labels.
-        Color hoverBg = new Color(30, 40, 70);
         MouseAdapter hover = new MouseAdapter() {
-            @Override public void mouseEntered(MouseEvent e) { card.setBackground(hoverBg); }
+            @Override public void mouseEntered(MouseEvent e) { card.setBackground(theme.rowHoverBg()); }
             @Override public void mouseExited(MouseEvent e) {
                 // Only reset if the cursor actually left the card's bounding box
                 Point p = e.getPoint();
@@ -1695,8 +1768,8 @@ public class Main {
         JButton btn = new JButton(label);
         btn.setUI(new javax.swing.plaf.basic.BasicButtonUI());
         btn.setFont(CAPTION_FONT);
-        btn.setBackground(theme.background());
-        btn.setForeground(theme.mutedText());
+        btn.setBackground(theme.btnBg());
+        btn.setForeground(theme.primaryText());
         btn.setOpaque(true);
         btn.setBorder(BorderFactory.createCompoundBorder(
                 BorderFactory.createLineBorder(theme.btnFlatBorder(), 1, true),
@@ -1704,8 +1777,14 @@ public class Main {
         btn.setFocusPainted(false);
         btn.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
         btn.addMouseListener(new MouseAdapter() {
-            @Override public void mouseEntered(MouseEvent e) { btn.setForeground(theme.primaryText()); }
-            @Override public void mouseExited(MouseEvent e)  { btn.setForeground(theme.mutedText()); }
+            @Override public void mouseEntered(MouseEvent e) {
+                btn.setBackground(theme.btnHoverBg());
+                btn.setForeground(theme.primaryText());
+            }
+            @Override public void mouseExited(MouseEvent e) {
+                btn.setBackground(theme.btnBg());
+                btn.setForeground(theme.primaryText());
+            }
         });
         return btn;
     }
@@ -1718,8 +1797,8 @@ public class Main {
         JToggleButton btn = new JToggleButton(label);
         btn.setUI(new javax.swing.plaf.basic.BasicToggleButtonUI());
         btn.setFont(CAPTION_FONT);
-        btn.setBackground(theme.background());
-        btn.setForeground(theme.mutedText());
+        btn.setBackground(theme.btnBg());
+        btn.setForeground(theme.primaryText());
         btn.setOpaque(true);
         btn.setBorder(BorderFactory.createCompoundBorder(
                 BorderFactory.createLineBorder(theme.btnFlatBorder(), 1, true),
@@ -1728,14 +1807,14 @@ public class Main {
         btn.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
         btn.addItemListener(e -> {
             if (btn.isSelected()) {
-                btn.setBackground(theme.btnHoverBg());
-                btn.setForeground(theme.accent());
+                btn.setBackground(theme.btnBg());
+                btn.setForeground(theme.primaryText());
                 btn.setBorder(BorderFactory.createCompoundBorder(
                         BorderFactory.createLineBorder(theme.btnHoverBorder(), 1, true),
                         new EmptyBorder(4, 10, 4, 10)));
             } else {
-                btn.setBackground(theme.background());
-                btn.setForeground(theme.mutedText());
+                btn.setBackground(theme.btnBg());
+                btn.setForeground(theme.primaryText());
                 btn.setBorder(BorderFactory.createCompoundBorder(
                         BorderFactory.createLineBorder(theme.btnFlatBorder(), 1, true),
                         new EmptyBorder(4, 10, 4, 10)));
@@ -1744,11 +1823,11 @@ public class Main {
         return btn;
     }
 
-    /** Creates an outlined action button with clear white text and a visible border. */
+    /** Creates an outlined action button with clear text and a visible border. */
     private JButton makeActionButton(String label) {
         JButton btn = new JButton(label);
         btn.setUI(new javax.swing.plaf.basic.BasicButtonUI());
-        btn.setFont(new Font("Segoe UI", Font.PLAIN, 12));
+        btn.setFont(BUTTON_FONT);
         btn.setBackground(theme.btnBg());
         btn.setForeground(theme.primaryText());
         btn.setOpaque(true);
@@ -1759,8 +1838,13 @@ public class Main {
         btn.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
         btn.addMouseListener(new MouseAdapter() {
             @Override public void mouseEntered(MouseEvent e) {
+                // Active nav button: keep accent styling, just brighten slightly
+                if (navButtonMap.containsValue(btn) && navButtonMap.get(activeCardKey) == btn) {
+                    btn.setBackground(theme.btnHoverBg());
+                    return;
+                }
                 btn.setBackground(theme.btnHoverBg());
-                btn.setForeground(Color.WHITE);
+                btn.setForeground(theme.primaryText());
                 btn.setBorder(BorderFactory.createCompoundBorder(
                         BorderFactory.createLineBorder(theme.btnHoverBorder(), 1, true),
                         new EmptyBorder(6, 14, 6, 14)));
@@ -1782,18 +1866,18 @@ public class Main {
 
     /** Highlights an interval button as the currently selected one. */
     private void applySelectedIntervalStyle(JButton btn) {
-        btn.setBackground(new Color(35, 35, 35));
-        btn.setForeground(Color.WHITE);
+        btn.setBackground(theme.btnBg());
+        btn.setForeground(theme.primaryText());
         btn.setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createLineBorder(new Color(120, 120, 120), 1, true),
+                BorderFactory.createLineBorder(theme.btnBorder(), 1, true),
                 new EmptyBorder(4, 10, 4, 10)));
     }
 
     /** Switches the highlighted interval button and resets the previous one. */
     private void setActiveIntervalButton(JButton btn) {
         if (selectedIntervalBtn != null) {
-            selectedIntervalBtn.setBackground(theme.background());
-            selectedIntervalBtn.setForeground(theme.mutedText());
+            selectedIntervalBtn.setBackground(theme.btnBg());
+            selectedIntervalBtn.setForeground(theme.primaryText());
             selectedIntervalBtn.setBorder(BorderFactory.createCompoundBorder(
                     BorderFactory.createLineBorder(theme.btnFlatBorder(), 1, true),
                     new EmptyBorder(4, 10, 4, 10)));
@@ -1809,8 +1893,8 @@ public class Main {
     private void resetIntervalSelectionToDefault() {
         if (intervalButtons == null) return;
         if (selectedIntervalBtn != null) {
-            selectedIntervalBtn.setBackground(theme.background());
-            selectedIntervalBtn.setForeground(theme.mutedText());
+            selectedIntervalBtn.setBackground(theme.btnBg());
+            selectedIntervalBtn.setForeground(theme.primaryText());
             selectedIntervalBtn.setBorder(BorderFactory.createCompoundBorder(
                     BorderFactory.createLineBorder(theme.btnFlatBorder(), 1, true),
                     new EmptyBorder(4, 10, 4, 10)));
@@ -1831,10 +1915,52 @@ public class Main {
         panel.setBackground(theme.card());
         panel.setBorder(BorderFactory.createCompoundBorder(
                 BorderFactory.createLineBorder(theme.border(), 1, true),
-                new EmptyBorder(14, 16, 14, 16)));
+                new EmptyBorder(CARD_PADDING_V, CARD_PADDING_H, CARD_PADDING_V, CARD_PADDING_H)));
         panel.setMaximumSize(new Dimension(Integer.MAX_VALUE, maxHeightPx));
         panel.setAlignmentX(Component.LEFT_ALIGNMENT);
         return panel;
+    }
+
+    /** Creates a standard card panel with consistent padding. */
+    private JPanel makeCard(LayoutManager layout) {
+        JPanel card = new JPanel(layout);
+        card.setBackground(theme.card());
+        card.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createLineBorder(theme.border(), 1, true),
+                new EmptyBorder(CARD_PADDING_V, CARD_PADDING_H, CARD_PADDING_V, CARD_PADDING_H)));
+        card.setAlignmentX(Component.LEFT_ALIGNMENT);
+        return card;
+    }
+
+    /** Creates a section header row with title on left and consistent bottom gap. */
+    private JPanel makeSectionHeader(String title) {
+        JPanel header = new JPanel(new BorderLayout(8, 0));
+        header.setBackground(theme.background());
+        header.setBorder(new EmptyBorder(0, 0, HEADER_BOTTOM_GAP, 0));
+        header.add(makeLabel(title, HEADING_FONT, theme.primaryText()), BorderLayout.WEST);
+        return header;
+    }
+
+    /**
+     * Adds a standard hover effect to a button: brighten background on enter,
+     * revert on exit.  The padding insets are preserved from the button's
+     * existing compound border.
+     */
+    private void addButtonHover(JButton btn, Insets padding) {
+        btn.addMouseListener(new MouseAdapter() {
+            @Override public void mouseEntered(MouseEvent e) {
+                btn.setBackground(theme.btnHoverBg());
+                btn.setBorder(BorderFactory.createCompoundBorder(
+                        BorderFactory.createLineBorder(theme.btnHoverBorder(), 1, true),
+                        new EmptyBorder(padding.top, padding.left, padding.bottom, padding.right)));
+            }
+            @Override public void mouseExited(MouseEvent e) {
+                btn.setBackground(theme.btnBg());
+                btn.setBorder(BorderFactory.createCompoundBorder(
+                        BorderFactory.createLineBorder(theme.btnBorder(), 1, true),
+                        new EmptyBorder(padding.top, padding.left, padding.bottom, padding.right)));
+            }
+        });
     }
 
     /** Convenience factory for a styled {@link JLabel}. */
@@ -2143,7 +2269,7 @@ public class Main {
         if (centerCardLayout != null) setActiveTab("results");
 
         resultsPanel.setVisible(true);
-        resultsPanel.fadeIn();
+
         mainWindow.revalidate();
         mainWindow.repaint();
     }
@@ -2237,7 +2363,7 @@ public class Main {
         card.setBackground(theme.card());
         card.setBorder(BorderFactory.createCompoundBorder(
                 BorderFactory.createLineBorder(theme.border(), 1, true),
-                new EmptyBorder(12, 14, 12, 14)));
+                new EmptyBorder(CARD_PADDING_V, CARD_PADDING_H, CARD_PADDING_V, CARD_PADDING_H)));
         card.setAlignmentX(Component.LEFT_ALIGNMENT);
 
         card.add(makeLabel("Latest News", STAT_VALUE_FONT, theme.primaryText()), BorderLayout.NORTH);
@@ -2262,11 +2388,11 @@ public class Main {
         JPanel content = new JPanel();
         content.setLayout(new BoxLayout(content, BoxLayout.Y_AXIS));
         content.setBackground(theme.background());
-        content.setBorder(new EmptyBorder(16, 0, 8, 0));
+        content.setBorder(new EmptyBorder(PAGE_PADDING_TOP, 0, CARD_GAP, 0));
 
         JPanel header = new JPanel(new BorderLayout(8, 0));
         header.setBackground(theme.background());
-        header.setBorder(new EmptyBorder(0, 0, 12, 0));
+        header.setBorder(new EmptyBorder(0, 0, HEADER_BOTTOM_GAP, 0));
         header.add(makeLabel("News", HEADING_FONT, theme.primaryText()), BorderLayout.WEST);
         newsTabStatusLabel = makeLabel("Top stories update automatically when you open this tab.",
                 CAPTION_FONT, theme.mutedText());
@@ -2282,13 +2408,13 @@ public class Main {
         newsSearchField = new JTextField();
         newsSearchField.setUI(new javax.swing.plaf.basic.BasicTextFieldUI());
         newsSearchField.setFont(BODY_FONT);
-        newsSearchField.setBackground(new Color(10, 10, 10));
+        newsSearchField.setBackground(theme.btnBg());
         newsSearchField.setForeground(theme.primaryText());
         newsSearchField.setOpaque(true);
         newsSearchField.setCaretColor(theme.accent());
         newsSearchField.setBorder(BorderFactory.createCompoundBorder(
                 BorderFactory.createLineBorder(theme.border(), 1, true),
-                new EmptyBorder(8, 10, 8, 10)));
+                new EmptyBorder(CARD_GAP, CARD_PADDING_H, CARD_GAP, CARD_PADDING_H)));
         newsSearchField.putClientProperty("JTextField.placeholderText",
                 "Try keywords like interest rates, oil, AI, semiconductors");
 
@@ -2303,14 +2429,14 @@ public class Main {
         searchCard.add(searchRow, BorderLayout.CENTER);
 
         content.add(searchCard);
-        content.add(verticalSpacer(10));
+        content.add(verticalSpacer(SECTION_GAP));
 
         newsTopStoriesContainer = new JPanel();
         newsTopStoriesContainer.setLayout(new BoxLayout(newsTopStoriesContainer, BoxLayout.Y_AXIS));
         newsTopStoriesContainer.setBackground(theme.card());
         JPanel topStoriesCard = buildNewsListCard("Top Relevant News Today", newsTopStoriesContainer);
         content.add(topStoriesCard);
-        content.add(verticalSpacer(10));
+        content.add(verticalSpacer(SECTION_GAP));
 
         newsSearchResultsContainer = new JPanel();
         newsSearchResultsContainer.setLayout(new BoxLayout(newsSearchResultsContainer, BoxLayout.Y_AXIS));
@@ -2341,7 +2467,7 @@ public class Main {
         card.setBackground(theme.card());
         card.setBorder(BorderFactory.createCompoundBorder(
                 BorderFactory.createLineBorder(theme.border(), 1, true),
-                new EmptyBorder(12, 14, 12, 14)));
+                new EmptyBorder(CARD_PADDING_V, CARD_PADDING_H, CARD_PADDING_V, CARD_PADDING_H)));
         card.setAlignmentX(Component.LEFT_ALIGNMENT);
         card.add(makeLabel(title, STAT_VALUE_FONT, theme.primaryText()), BorderLayout.NORTH);
         card.add(container, BorderLayout.CENTER);
@@ -2355,7 +2481,9 @@ public class Main {
     private JPanel buildNewsCard(NewsItem item) {
         JPanel card = new JPanel(new BorderLayout(0, 4));
         card.setBackground(theme.card());
-        card.setBorder(new EmptyBorder(8, 0, 8, 0));
+        card.setBorder(BorderFactory.createCompoundBorder(
+                new MatteBorder(0, 0, 1, 0, theme.border()),
+                new EmptyBorder(CARD_GAP, CARD_PADDING_H, CARD_GAP, CARD_PADDING_H)));
         card.setAlignmentX(Component.LEFT_ALIGNMENT);
         card.setMaximumSize(new Dimension(Integer.MAX_VALUE, 80));
 
@@ -2522,11 +2650,11 @@ public class Main {
         JPanel content = new JPanel();
         content.setLayout(new BoxLayout(content, BoxLayout.Y_AXIS));
         content.setBackground(theme.background());
-        content.setBorder(new EmptyBorder(16, 0, 8, 0));
+        content.setBorder(new EmptyBorder(PAGE_PADDING_TOP, 0, CARD_GAP, 0));
 
         JPanel header = new JPanel(new BorderLayout(8, 0));
         header.setBackground(theme.background());
-        header.setBorder(new EmptyBorder(0, 0, 12, 0));
+        header.setBorder(new EmptyBorder(0, 0, HEADER_BOTTOM_GAP, 0));
         header.add(makeLabel("Screener", HEADING_FONT, theme.primaryText()), BorderLayout.WEST);
         screenerStatusLabel = makeLabel(
                 "Filter active US stocks by change, market cap, volume, valuation, beta, and yield.",
@@ -2600,23 +2728,23 @@ public class Main {
         customFiltersCard.setBackground(theme.card());
         customFiltersCard.setBorder(BorderFactory.createCompoundBorder(
                 BorderFactory.createLineBorder(theme.border(), 1, true),
-                new EmptyBorder(8, 12, 8, 12)));
+                new EmptyBorder(CARD_PADDING_V, CARD_PADDING_H, CARD_PADDING_V, CARD_PADDING_H)));
         customFiltersCard.setVisible(false);
         customFiltersCard.setAlignmentX(Component.LEFT_ALIGNMENT);
         customFiltersCard.setMaximumSize(new Dimension(Integer.MAX_VALUE, Integer.MAX_VALUE));
 
-        JButton addFilterBtn = makeActionButton("\uFF0B Add Filter");
+        JButton addFilterBtn = makeActionButton("+ Add Filter");
         addFilterBtn.setAlignmentX(Component.LEFT_ALIGNMENT);
         addFilterBtn.addActionListener(e -> addCustomFilterRow());
         customFiltersCard.add(addFilterBtn);
         content.add(customFiltersCard);
-        content.add(verticalSpacer(10));
+        content.add(verticalSpacer(SECTION_GAP));
 
         JPanel resultsCard = new JPanel(new BorderLayout(0, 8));
         resultsCard.setBackground(theme.card());
         resultsCard.setBorder(BorderFactory.createCompoundBorder(
                 BorderFactory.createLineBorder(theme.border(), 1, true),
-                new EmptyBorder(12, 14, 12, 14)));
+                new EmptyBorder(CARD_PADDING_V, CARD_PADDING_H, CARD_PADDING_V, CARD_PADDING_H)));
         resultsCard.setAlignmentX(Component.LEFT_ALIGNMENT);
         resultsCard.add(makeLabel("Matches", STAT_VALUE_FONT, theme.primaryText()), BorderLayout.NORTH);
 
@@ -2628,7 +2756,7 @@ public class Main {
         screenerTable.setBackground(theme.background());
         screenerTable.setGridColor(theme.border());
         screenerTable.setRowHeight(26);
-        screenerTable.setSelectionBackground(new Color(42, 60, 96));
+        screenerTable.setSelectionBackground(theme.selectionBg());
         screenerTable.setSelectionForeground(theme.primaryText());
         applyTableStyling(screenerTable);
         screenerTable.setShowVerticalLines(true);
@@ -2647,7 +2775,7 @@ public class Main {
         JTableHeader tableHeader = screenerTable.getTableHeader();
         tableHeader.setUI(new javax.swing.plaf.basic.BasicTableHeaderUI());
         tableHeader.setFont(CAPTION_FONT);
-        tableHeader.setBackground(new Color(24, 24, 38));
+        tableHeader.setBackground(theme.card());
         tableHeader.setForeground(theme.accent());
         tableHeader.setBorder(BorderFactory.createLineBorder(theme.border()));
         tableHeader.setReorderingAllowed(false);
@@ -2688,28 +2816,28 @@ public class Main {
         JTextField field = new JTextField();
         field.setUI(new javax.swing.plaf.basic.BasicTextFieldUI());
         field.setFont(BODY_FONT);
-        field.setBackground(new Color(10, 10, 10));
+        field.setBackground(theme.btnBg());
         field.setForeground(theme.primaryText());
         field.setCaretColor(theme.accent());
         field.setOpaque(true);
         field.setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createLineBorder(new Color(55, 55, 55), 1, true),
+                BorderFactory.createLineBorder(theme.btnBorder(), 1, true),
                 new EmptyBorder(6, 8, 6, 8)));
         field.putClientProperty("JTextField.placeholderText", placeholder);
         if (onEnter != null) field.addActionListener(e -> onEnter.run());
         return field;
     }
 
-    /** Forces a scroll bar to render with dark colors by bypassing the system L&F. */
+    /** Forces a scroll bar to render with theme colors by bypassing the system L&F. */
     private void styleScrollBar(JScrollBar bar) {
         bar.setUI(new javax.swing.plaf.basic.BasicScrollBarUI() {
             @Override protected void configureScrollBarColors() {
-                thumbColor         = new Color(60, 60, 80);
-                thumbHighlightColor = new Color(80, 80, 105);
-                thumbDarkShadowColor = new Color(30, 30, 45);
-                thumbLightShadowColor = new Color(50, 50, 68);
-                trackColor         = new Color(18, 18, 28);
-                trackHighlightColor = new Color(22, 22, 35);
+                thumbColor          = theme.btnBorder();
+                thumbHighlightColor = theme.btnHoverBorder();
+                thumbDarkShadowColor = theme.border();
+                thumbLightShadowColor = theme.btnFlatBorder();
+                trackColor          = theme.background();
+                trackHighlightColor = theme.card();
             }
             @Override protected JButton createDecreaseButton(int orientation) {
                 return makeScrollArrowButton();
@@ -2725,21 +2853,21 @@ public class Main {
                 return btn;
             }
         });
-        bar.setBackground(new Color(18, 18, 28));
-        bar.setForeground(new Color(60, 60, 80));
+        bar.setBackground(theme.background());
+        bar.setForeground(theme.btnBorder());
     }
 
     /** Shared styling for combo boxes used in dashboard tabs. */
     private void styleComboBox(JComboBox<?> comboBox) {
         comboBox.setUI(new javax.swing.plaf.basic.BasicComboBoxUI());
         comboBox.setFont(BODY_FONT);
-        comboBox.setBackground(new Color(10, 10, 10));
+        comboBox.setBackground(theme.btnBg());
         comboBox.setForeground(theme.primaryText());
         comboBox.setOpaque(true);
-        comboBox.setBorder(BorderFactory.createLineBorder(new Color(55, 55, 55), 1, true));
-        // Force every sub-component (arrow button, editor) black as well
+        comboBox.setBorder(BorderFactory.createLineBorder(theme.btnBorder(), 1, true));
+        // Force every sub-component (arrow button, editor) to match the button background
         for (Component c : comboBox.getComponents()) {
-            c.setBackground(new Color(10, 10, 10));
+            c.setBackground(theme.btnBg());
             c.setForeground(theme.primaryText());
         }
         comboBox.setRenderer(new DefaultListCellRenderer() {
@@ -2747,11 +2875,11 @@ public class Main {
             public Component getListCellRendererComponent(JList<?> list, Object value,
                     int index, boolean isSelected, boolean cellHasFocus) {
                 super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus);
-                setBackground(isSelected ? new Color(42, 60, 96) : new Color(10, 10, 10));
+                setBackground(isSelected ? theme.selectionBg() : theme.btnBg());
                 setForeground(theme.primaryText());
                 setBorder(new EmptyBorder(4, 8, 4, 8));
                 setFont(BODY_FONT);
-                list.setBackground(new Color(10, 10, 10));
+                list.setBackground(theme.btnBg());
                 return this;
             }
         });
@@ -2995,7 +3123,7 @@ public class Main {
 
         JTextField val1 = new JTextField(5);
         val1.setFont(BODY_FONT);
-        val1.setBackground(new Color(10,10,10));
+        val1.setBackground(theme.btnBg());
         val1.setForeground(theme.primaryText());
         val1.setBorder(BorderFactory.createCompoundBorder(
                 BorderFactory.createLineBorder(theme.border(),1,true), new EmptyBorder(3,6,3,6)));
@@ -3005,7 +3133,7 @@ public class Main {
 
         JTextField val2 = new JTextField(5);
         val2.setFont(BODY_FONT);
-        val2.setBackground(new Color(10,10,10));
+        val2.setBackground(theme.btnBg());
         val2.setForeground(theme.primaryText());
         val2.setBorder(BorderFactory.createCompoundBorder(
                 BorderFactory.createLineBorder(theme.border(),1,true), new EmptyBorder(3,6,3,6)));
@@ -3018,12 +3146,18 @@ public class Main {
         });
 
         JButton removeBtn = new JButton("\u00D7");
+        removeBtn.setUI(new javax.swing.plaf.basic.BasicButtonUI());
         removeBtn.setFont(CAPTION_FONT);
         removeBtn.setForeground(theme.mutedText());
         removeBtn.setBackground(theme.card());
+        removeBtn.setOpaque(true);
         removeBtn.setBorder(BorderFactory.createEmptyBorder(2, 6, 2, 6));
         removeBtn.setFocusPainted(false);
         removeBtn.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        removeBtn.addMouseListener(new MouseAdapter() {
+            @Override public void mouseEntered(MouseEvent e) { removeBtn.setForeground(theme.loss()); }
+            @Override public void mouseExited(MouseEvent e)  { removeBtn.setForeground(theme.mutedText()); }
+        });
         removeBtn.addActionListener(e -> {
             customFiltersCard.remove(row);
             customFiltersCard.revalidate();
@@ -3184,7 +3318,7 @@ public class Main {
      * when the window is focused, or a Windows system-tray notification otherwise.
      */
     private void fireAlert(WatchlistManager.WatchlistEntry entry) {
-        String msg = "\uD83D\uDD14  " + entry.ticker + " reached "
+        String msg = "[!]  " + entry.ticker + " reached "
                 + String.format("%.2f", entry.lastKnownPrice)
                 + " \u2014 alert triggered";
 
@@ -3222,11 +3356,22 @@ public class Main {
         growTimer.start();
     }
 
-    /** Hides the alert banner immediately. */
+    /** Hides the alert banner with a slide-out animation mirroring the slide-in. */
     private void hideAlertBanner() {
-        alertBannerPanel.setVisible(false);
-        alertBannerPanel.setPreferredSize(new Dimension(0, 0));
-        topBar.revalidate();
+        if (alertDismissTimer != null) alertDismissTimer.stop();
+        final int[] h = {40};
+        javax.swing.Timer shrinkTimer = new javax.swing.Timer(16, null);
+        shrinkTimer.addActionListener(e -> {
+            h[0] = Math.max(0, h[0] - 4);
+            alertBannerPanel.setPreferredSize(new Dimension(0, h[0]));
+            topBar.revalidate();
+            if (h[0] <= 0) {
+                shrinkTimer.stop();
+                alertBannerPanel.setVisible(false);
+                alertBannerPanel.setPreferredSize(new Dimension(0, 0));
+            }
+        });
+        shrinkTimer.start();
     }
 
     /**
@@ -3269,7 +3414,7 @@ public class Main {
         // --- Header ---
         JPanel header = new JPanel(new BorderLayout(8, 0));
         header.setBackground(theme.background());
-        header.setBorder(new EmptyBorder(16, 0, 10, 0));
+        header.setBorder(new EmptyBorder(PAGE_PADDING_TOP, 0, HEADER_BOTTOM_GAP, 0));
 
         JLabel titleLbl = makeLabel("Portfolio", HEADING_FONT, theme.primaryText());
 
@@ -3297,9 +3442,9 @@ public class Main {
         scroll.getVerticalScrollBar().setUnitIncrement(16);
 
         // --- Portfolio Performance Chart ---
-        JPanel chartSection = new JPanel(new BorderLayout(0, 6));
+        JPanel chartSection = new JPanel(new BorderLayout(0, CARD_GAP));
         chartSection.setBackground(theme.background());
-        chartSection.setBorder(new EmptyBorder(12, 0, 0, 0));
+        chartSection.setBorder(new EmptyBorder(SECTION_GAP, 0, 0, 0));
 
         JPanel chartHeader = new JPanel(new BorderLayout());
         chartHeader.setBackground(theme.background());
@@ -3361,17 +3506,17 @@ public class Main {
     private JPanel buildPortfolioRow(PortfolioManager.PortfolioPosition pos) {
         boolean closed = pos.sharesOwned <= 0;
 
-        Color rowBg = closed ? new Color(22, 22, 38) : theme.card();
+        Color rowBg = closed ? theme.background() : theme.card();
         JPanel row = new JPanel(new GridLayout(1, 8, 6, 0));
         row.setBackground(rowBg);
         row.setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createLineBorder(closed ? new Color(40, 40, 60) : theme.border(), 1, true),
-                new EmptyBorder(10, 12, 10, 12)));
+                BorderFactory.createLineBorder(theme.border(), 1, true),
+                new EmptyBorder(CARD_PADDING_V, CARD_PADDING_H, CARD_PADDING_V, CARD_PADDING_H)));
         row.setAlignmentX(Component.LEFT_ALIGNMENT);
         row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 54));
 
         // Col 1: Ticker (with CLOSED badge for fully-sold positions)
-        String tickerText = closed ? pos.ticker + "  \u2713CLOSED" : pos.ticker;
+        String tickerText = closed ? pos.ticker + "  [CLOSED]" : pos.ticker;
         row.add(makeLabel(tickerText, STAT_VALUE_FONT, closed ? theme.mutedText() : theme.accent()));
 
         // Col 2: Shares
@@ -3415,7 +3560,8 @@ public class Main {
 
         if (!closed) {
             JButton sellBtn = new JButton("Sell");
-            sellBtn.setFont(new Font("Segoe UI", Font.PLAIN, 11));
+            sellBtn.setUI(new javax.swing.plaf.basic.BasicButtonUI());
+            sellBtn.setFont(CAPTION_FONT);
             sellBtn.setForeground(new Color(255, 190, 60));
             sellBtn.setBackground(new Color(50, 38, 20));
             sellBtn.setOpaque(true);
@@ -3433,7 +3579,8 @@ public class Main {
         }
 
         JButton histBtn = new JButton("History");
-        histBtn.setFont(new Font("Segoe UI", Font.PLAIN, 11));
+        histBtn.setUI(new javax.swing.plaf.basic.BasicButtonUI());
+        histBtn.setFont(CAPTION_FONT);
         histBtn.setForeground(theme.accent());
         histBtn.setBackground(theme.card());
         histBtn.setOpaque(true);
@@ -3442,13 +3589,29 @@ public class Main {
                 new EmptyBorder(3, 6, 3, 6)));
         histBtn.setFocusPainted(false);
         histBtn.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        histBtn.addMouseListener(new MouseAdapter() {
+            @Override public void mouseEntered(MouseEvent e) {
+                histBtn.setBackground(theme.btnHoverBg());
+                histBtn.setBorder(BorderFactory.createCompoundBorder(
+                        BorderFactory.createLineBorder(theme.btnHoverBorder(), 1, true),
+                        new EmptyBorder(3, 6, 3, 6)));
+            }
+            @Override public void mouseExited(MouseEvent e) {
+                histBtn.setBackground(theme.card());
+                histBtn.setBorder(BorderFactory.createCompoundBorder(
+                        BorderFactory.createLineBorder(theme.border(), 1, true),
+                        new EmptyBorder(3, 6, 3, 6)));
+            }
+        });
         histBtn.addActionListener(e -> showTransactionHistory(pos.ticker));
         actions.add(histBtn);
 
         JButton removeBtn = new JButton("\u00D7");
+        removeBtn.setUI(new javax.swing.plaf.basic.BasicButtonUI());
         removeBtn.setFont(CAPTION_FONT);
         removeBtn.setForeground(theme.mutedText());
         removeBtn.setBackground(rowBg);
+        removeBtn.setOpaque(true);
         removeBtn.setBorder(new EmptyBorder(3, 6, 3, 2));
         removeBtn.setFocusPainted(false);
         removeBtn.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
@@ -3485,7 +3648,7 @@ public class Main {
 
         List<PortfolioManager.PortfolioPosition> positions = portfolioManager.getPositions();
         if (positions.isEmpty()) {
-            JLabel empty = makeLabel("No positions yet. Click \"\uFF0B Add Position\" to get started.",
+            JLabel empty = makeLabel("No positions yet. Click \"+ Add Position\" to get started.",
                     BODY_FONT, theme.mutedText());
             empty.setBorder(new EmptyBorder(20, 12, 8, 12));
             empty.setAlignmentX(Component.LEFT_ALIGNMENT);
@@ -3522,11 +3685,24 @@ public class Main {
         JTextField tickerField   = new JTextField(8);
         JTextField sharesField   = new JTextField(8);
         JTextField buyPriceField = new JTextField(8);
+        for (JTextField f : new JTextField[]{tickerField, sharesField, buyPriceField}) {
+            f.setFont(BODY_FONT);
+            f.setBackground(theme.btnBg());
+            f.setForeground(theme.primaryText());
+            f.setCaretColor(theme.accent());
+            f.setBorder(BorderFactory.createCompoundBorder(
+                    BorderFactory.createLineBorder(theme.border(), 1, true),
+                    new EmptyBorder(4, 8, 4, 8)));
+        }
 
         JPanel form = new JPanel(new GridLayout(3, 2, 8, 6));
-        form.add(new JLabel("Ticker:"));       form.add(tickerField);
-        form.add(new JLabel("Shares:"));       form.add(sharesField);
-        form.add(new JLabel("Avg Buy Price:")); form.add(buyPriceField);
+        form.setBackground(theme.card());
+        JLabel lbl1 = new JLabel("Ticker:");       lbl1.setFont(BODY_FONT); lbl1.setForeground(theme.primaryText());
+        JLabel lbl2 = new JLabel("Shares:");       lbl2.setFont(BODY_FONT); lbl2.setForeground(theme.primaryText());
+        JLabel lbl3 = new JLabel("Avg Buy Price:"); lbl3.setFont(BODY_FONT); lbl3.setForeground(theme.primaryText());
+        form.add(lbl1);  form.add(tickerField);
+        form.add(lbl2);  form.add(sharesField);
+        form.add(lbl3);  form.add(buyPriceField);
 
         int result = JOptionPane.showConfirmDialog(mainWindow, form,
                 "Add Portfolio Position", JOptionPane.OK_CANCEL_OPTION,
@@ -3556,19 +3732,33 @@ public class Main {
         JTextField sharesField = new JTextField(8);
         String preFillPrice = pos.currentPrice > 0 ? String.format("%.2f", pos.currentPrice) : "";
         JTextField priceField  = new JTextField(preFillPrice, 8);
+        for (JTextField f : new JTextField[]{sharesField, priceField}) {
+            f.setFont(BODY_FONT);
+            f.setBackground(theme.btnBg());
+            f.setForeground(theme.primaryText());
+            f.setCaretColor(theme.accent());
+            f.setBorder(BorderFactory.createCompoundBorder(
+                    BorderFactory.createLineBorder(theme.border(), 1, true),
+                    new EmptyBorder(4, 8, 4, 8)));
+        }
 
         JPanel form = new JPanel(new GridLayout(4, 2, 8, 6));
-        form.add(new JLabel("Ticker:"));
+        form.setBackground(theme.card());
+        JLabel lbl1 = new JLabel("Ticker:");        lbl1.setFont(BODY_FONT); lbl1.setForeground(theme.primaryText());
+        JLabel lbl2 = new JLabel("Shares owned:");   lbl2.setFont(BODY_FONT); lbl2.setForeground(theme.primaryText());
+        JLabel lbl3 = new JLabel("Shares to sell:"); lbl3.setFont(BODY_FONT); lbl3.setForeground(theme.primaryText());
+        JLabel lbl4 = new JLabel("Sell price ($):"); lbl4.setFont(BODY_FONT); lbl4.setForeground(theme.primaryText());
+        form.add(lbl1);
         form.add(makeLabel(pos.ticker, BODY_FONT, theme.accent()));
-        form.add(new JLabel("Shares owned:"));
+        form.add(lbl2);
         form.add(makeLabel(String.format("%.4f", pos.sharesOwned), BODY_FONT, theme.primaryText()));
-        form.add(new JLabel("Shares to sell:"));
+        form.add(lbl3);
         form.add(sharesField);
-        form.add(new JLabel("Sell price ($):"));
+        form.add(lbl4);
         form.add(priceField);
 
         int result = JOptionPane.showConfirmDialog(mainWindow, form,
-                "Sell Position — " + pos.ticker, JOptionPane.OK_CANCEL_OPTION,
+                "Sell Position \u2014 " + pos.ticker, JOptionPane.OK_CANCEL_OPTION,
                 JOptionPane.PLAIN_MESSAGE);
         if (result != JOptionPane.OK_OPTION) return;
 
@@ -3582,7 +3772,7 @@ public class Main {
             refreshPortfolioPricesInBackground();
         } catch (NumberFormatException e) {
             JOptionPane.showMessageDialog(mainWindow,
-                    "Please enter a valid share count (≤ shares owned) and price.",
+                    "Please enter a valid share count (\u2264 shares owned) and price.",
                     "Invalid Input", JOptionPane.ERROR_MESSAGE);
         }
     }
@@ -3611,7 +3801,7 @@ public class Main {
         JScrollPane sp = new JScrollPane(table);
         sp.setPreferredSize(new Dimension(500, 250));
         JOptionPane.showMessageDialog(mainWindow, sp,
-                "Transaction History — " + ticker, JOptionPane.PLAIN_MESSAGE);
+                "Transaction History \u2014 " + ticker, JOptionPane.PLAIN_MESSAGE);
     }
 
     /**
@@ -3689,7 +3879,7 @@ public class Main {
                 if (total > 0) { portfolioHistoryManager.recordSnapshot(total); refreshPortfolioChart(); }
                 // Update sector pie chart
                 updateSectorPieChart(snapshot);
-                hideStatusLoading("Portfolio updated — " + snapshot.size() + " positions");
+                hideStatusLoading("Portfolio updated \u2014 " + snapshot.size() + " positions");
             }
         }.execute();
     }
@@ -3702,16 +3892,16 @@ public class Main {
     private JPanel buildCommoditiesPanel() {
         JPanel panel = new JPanel(new BorderLayout(0, 8));
         panel.setBackground(theme.background());
-        panel.setBorder(new EmptyBorder(16, 0, 8, 0));
+        panel.setBorder(new EmptyBorder(PAGE_PADDING_TOP, 0, CARD_GAP, 0));
 
         JPanel header = new JPanel(new BorderLayout(8, 0));
         header.setBackground(theme.background());
-        header.setBorder(new EmptyBorder(0, 0, 10, 0));
+        header.setBorder(new EmptyBorder(0, 0, HEADER_BOTTOM_GAP, 0));
         header.add(makeLabel("Commodities", HEADING_FONT, theme.primaryText()), BorderLayout.WEST);
         commoditiesLastUpdated = makeLabel("", CAPTION_FONT, theme.mutedText());
         commoditiesLastUpdated.setHorizontalAlignment(SwingConstants.CENTER);
         header.add(commoditiesLastUpdated, BorderLayout.CENTER);
-        JButton refreshBtn = makeActionButton("\u21BB Refresh");
+        JButton refreshBtn = makeActionButton("Refresh");
         refreshBtn.addActionListener(e -> refreshCommoditiesInBackground());
         header.add(refreshBtn, BorderLayout.EAST);
         panel.add(header, BorderLayout.NORTH);
@@ -3721,11 +3911,11 @@ public class Main {
         content.setLayout(new BoxLayout(content, BoxLayout.Y_AXIS));
         content.setBackground(theme.background());
 
-        commoditiesGrid = new JPanel(new GridLayout(4, 2, 12, 12));
+        commoditiesGrid = new JPanel(new GridLayout(4, 2, SECTION_GAP, SECTION_GAP));
         commoditiesGrid.setBackground(theme.background());
         commoditiesGrid.setAlignmentX(Component.LEFT_ALIGNMENT);
         content.add(commoditiesGrid);
-        content.add(Box.createVerticalStrut(14));
+        content.add(Box.createVerticalStrut(SECTION_GAP));
 
         commodityDetailCard = buildCommodityDetailCard();
         commodityDetailCard.setVisible(false);
@@ -3855,15 +4045,15 @@ public class Main {
     /** Builds a single commodity card. Pass {@code null} snap for a loading placeholder. */
     private JPanel buildCommodityCard(CommoditySnapshot snap, String displayName) {
         boolean selected = snap != null && snap.ticker().equalsIgnoreCase(selectedCommodityTicker);
-        Color baseCardBackground = selected ? new Color(34, 46, 74) : theme.card();
-        Color hoverCardBackground = selected ? new Color(40, 54, 84) : new Color(36, 36, 58);
+        Color baseCardBackground = selected ? theme.selectionBg() : theme.card();
+        Color hoverCardBackground = selected ? theme.selectionBg().brighter() : theme.rowHoverBg();
         Color borderColor = selected ? theme.accent() : theme.border();
 
         JPanel card = new JPanel(new BorderLayout(0, 6));
         card.setBackground(baseCardBackground);
         card.setBorder(BorderFactory.createCompoundBorder(
                 BorderFactory.createLineBorder(borderColor, selected ? 2 : 1, true),
-                new EmptyBorder(12, 14, 12, 14)));
+                new EmptyBorder(CARD_PADDING_V, CARD_PADDING_H, CARD_PADDING_V, CARD_PADDING_H)));
         card.setCursor(snap != null
                 ? Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
                 : Cursor.getDefaultCursor());
@@ -3957,8 +4147,8 @@ public class Main {
     private void resetCommodityIntervalSelectionToDefault() {
         if (commodityIntervalButtons == null) return;
         if (selectedCommodityIntervalBtn != null) {
-            selectedCommodityIntervalBtn.setBackground(theme.background());
-            selectedCommodityIntervalBtn.setForeground(theme.mutedText());
+            selectedCommodityIntervalBtn.setBackground(theme.btnBg());
+            selectedCommodityIntervalBtn.setForeground(theme.primaryText());
         }
         selectedCommodityIntervalBtn = commodityIntervalButtons[COMMODITY_DEFAULT_INTERVAL_INDEX];
         applySelectedIntervalStyle(selectedCommodityIntervalBtn);
@@ -3970,8 +4160,8 @@ public class Main {
     /** Switches the highlighted commodity interval button. */
     private void setActiveCommodityIntervalButton(JButton btn) {
         if (selectedCommodityIntervalBtn != null) {
-            selectedCommodityIntervalBtn.setBackground(theme.background());
-            selectedCommodityIntervalBtn.setForeground(theme.mutedText());
+            selectedCommodityIntervalBtn.setBackground(theme.btnBg());
+            selectedCommodityIntervalBtn.setForeground(theme.primaryText());
         }
         selectedCommodityIntervalBtn = btn;
         applySelectedIntervalStyle(btn);
@@ -4159,7 +4349,7 @@ public class Main {
             }
         }
         try (java.io.FileOutputStream fos = new java.io.FileOutputStream(NOTES_FILE)) {
-            stockNotes.store(fos, "Stock Analyzer — Per-Ticker Notes");
+            stockNotes.store(fos, "Stock Analyzer \u2014 Per-Ticker Notes");
             if (stockNotesStatusLabel != null) stockNotesStatusLabel.setText("saved");
         } catch (IOException ignored) {}
     }
@@ -4172,16 +4362,16 @@ public class Main {
     private JPanel buildCryptoPanel() {
         JPanel panel = new JPanel(new BorderLayout(0, 8));
         panel.setBackground(theme.background());
-        panel.setBorder(new EmptyBorder(16, 0, 8, 0));
+        panel.setBorder(new EmptyBorder(PAGE_PADDING_TOP, 0, CARD_GAP, 0));
 
         JPanel header = new JPanel(new BorderLayout(8, 0));
         header.setBackground(theme.background());
-        header.setBorder(new EmptyBorder(0, 0, 10, 0));
+        header.setBorder(new EmptyBorder(0, 0, HEADER_BOTTOM_GAP, 0));
         header.add(makeLabel("Crypto", HEADING_FONT, theme.primaryText()), BorderLayout.WEST);
         cryptoLastUpdated = makeLabel("", CAPTION_FONT, theme.mutedText());
         cryptoLastUpdated.setHorizontalAlignment(SwingConstants.CENTER);
         header.add(cryptoLastUpdated, BorderLayout.CENTER);
-        JButton refreshBtn = makeActionButton("\u21BB Refresh");
+        JButton refreshBtn = makeActionButton("Refresh");
         refreshBtn.addActionListener(e -> refreshCryptosInBackground());
         header.add(refreshBtn, BorderLayout.EAST);
         panel.add(header, BorderLayout.NORTH);
@@ -4190,11 +4380,11 @@ public class Main {
         content.setLayout(new BoxLayout(content, BoxLayout.Y_AXIS));
         content.setBackground(theme.background());
 
-        cryptoGrid = new JPanel(new GridLayout(4, 2, 12, 12));
+        cryptoGrid = new JPanel(new GridLayout(4, 2, SECTION_GAP, SECTION_GAP));
         cryptoGrid.setBackground(theme.background());
         cryptoGrid.setAlignmentX(Component.LEFT_ALIGNMENT);
         content.add(cryptoGrid);
-        content.add(Box.createVerticalStrut(14));
+        content.add(Box.createVerticalStrut(SECTION_GAP));
 
         cryptoDetailCard = buildCryptoDetailCard();
         cryptoDetailCard.setVisible(false);
@@ -4322,15 +4512,15 @@ public class Main {
     /** Builds one crypto card. Accepts {@code null} snap for a loading placeholder. */
     private JPanel buildCryptoCard(CommoditySnapshot snap, String displayName) {
         boolean selected  = snap != null && snap.ticker().equalsIgnoreCase(selectedCryptoTicker);
-        Color baseBg      = selected ? new Color(34, 46, 74) : theme.card();
-        Color hoverBg     = selected ? new Color(40, 54, 84) : new Color(36, 36, 58);
+        Color baseBg      = selected ? theme.selectionBg() : theme.card();
+        Color hoverBg     = selected ? theme.selectionBg().brighter() : theme.rowHoverBg();
         Color borderColor = selected ? theme.accent() : theme.border();
 
         JPanel card = new JPanel(new BorderLayout(0, 6));
         card.setBackground(baseBg);
         card.setBorder(BorderFactory.createCompoundBorder(
                 BorderFactory.createLineBorder(borderColor, selected ? 2 : 1, true),
-                new EmptyBorder(12, 14, 12, 14)));
+                new EmptyBorder(CARD_PADDING_V, CARD_PADDING_H, CARD_PADDING_V, CARD_PADDING_H)));
         card.setCursor(snap != null
                 ? Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
                 : Cursor.getDefaultCursor());
@@ -4510,8 +4700,8 @@ public class Main {
     private void resetCryptoIntervalSelectionToDefault() {
         if (cryptoIntervalButtons == null) return;
         if (selectedCryptoIntervalBtn != null) {
-            selectedCryptoIntervalBtn.setBackground(theme.background());
-            selectedCryptoIntervalBtn.setForeground(theme.mutedText());
+            selectedCryptoIntervalBtn.setBackground(theme.btnBg());
+            selectedCryptoIntervalBtn.setForeground(theme.primaryText());
         }
         selectedCryptoIntervalBtn = cryptoIntervalButtons[COMMODITY_DEFAULT_INTERVAL_INDEX];
         applySelectedIntervalStyle(selectedCryptoIntervalBtn);
@@ -4523,8 +4713,8 @@ public class Main {
     /** Switches the highlighted crypto interval button. */
     private void setActiveCryptoIntervalButton(JButton btn) {
         if (selectedCryptoIntervalBtn != null) {
-            selectedCryptoIntervalBtn.setBackground(theme.background());
-            selectedCryptoIntervalBtn.setForeground(theme.mutedText());
+            selectedCryptoIntervalBtn.setBackground(theme.btnBg());
+            selectedCryptoIntervalBtn.setForeground(theme.primaryText());
         }
         selectedCryptoIntervalBtn = btn;
         applySelectedIntervalStyle(btn);
@@ -4588,14 +4778,14 @@ public class Main {
     private JPanel buildHeatmapPanel() {
         JPanel panel = new JPanel(new BorderLayout(0, 8));
         panel.setBackground(theme.background());
-        panel.setBorder(new EmptyBorder(16, 0, 8, 0));
+        panel.setBorder(new EmptyBorder(PAGE_PADDING_TOP, 0, CARD_GAP, 0));
 
         JPanel header = new JPanel(new BorderLayout(8, 0));
         header.setBackground(theme.background());
-        header.setBorder(new EmptyBorder(0, 0, 10, 0));
+        header.setBorder(new EmptyBorder(0, 0, HEADER_BOTTOM_GAP, 0));
         header.add(makeLabel("Sector Heatmap", HEADING_FONT, theme.primaryText()), BorderLayout.WEST);
         heatmapLastUpdated = makeLabel("", CAPTION_FONT, theme.mutedText());
-        JButton refreshBtn = makeActionButton("\u21BB Refresh");
+        JButton refreshBtn = makeActionButton("Refresh");
         refreshBtn.addActionListener(e -> refreshHeatmapInBackground());
         JPanel right = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
         right.setBackground(theme.background());
@@ -4604,7 +4794,7 @@ public class Main {
         header.add(right, BorderLayout.EAST);
         panel.add(header, BorderLayout.NORTH);
 
-        heatmapGrid = new JPanel(new GridLayout(2, 6, 10, 10));
+        heatmapGrid = new JPanel(new GridLayout(2, 6, SECTION_GAP, SECTION_GAP));
         heatmapGrid.setBackground(theme.background());
         rebuildHeatmapGrid();
 
@@ -4613,6 +4803,7 @@ public class Main {
                 JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
         scroll.setBorder(null);
         scroll.getViewport().setBackground(theme.background());
+        scroll.getVerticalScrollBar().setUnitIncrement(16);
         panel.add(scroll, BorderLayout.CENTER);
 
         heatmapRefreshTimer = new javax.swing.Timer(60_000, e -> refreshHeatmapInBackground());
@@ -4650,10 +4841,10 @@ public class Main {
                 new EmptyBorder(8, 8, 8, 8)));
         cell.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
 
-        JLabel nameLabel = makeLabel(snap.sectorName(), CAPTION_FONT, new Color(220, 220, 235));
-        JLabel tickerLabel = makeLabel(snap.etfTicker(), new Font("Segoe UI", Font.BOLD, 11), new Color(200, 200, 215));
+        JLabel nameLabel = makeLabel(snap.sectorName(), CAPTION_FONT, Color.WHITE);
+        JLabel tickerLabel = makeLabel(snap.etfTicker(), CAPTION_BOLD_FONT, Color.WHITE);
         String changeStr = (snap.changePercent() >= 0 ? "+" : "") + String.format("%.2f%%", snap.changePercent());
-        JLabel changeLabel = makeLabel(changeStr, new Font("Segoe UI", Font.BOLD, 14),
+        JLabel changeLabel = makeLabel(changeStr, STAT_VALUE_FONT,
                 snap.changePercent() >= 0 ? new Color(100, 230, 160) : new Color(255, 130, 130));
         nameLabel.setHorizontalAlignment(SwingConstants.CENTER);
         tickerLabel.setHorizontalAlignment(SwingConstants.CENTER);
@@ -4711,11 +4902,11 @@ public class Main {
     private JPanel buildEconCalendarPanel() {
         JPanel panel = new JPanel(new BorderLayout(0, 10));
         panel.setBackground(theme.background());
-        panel.setBorder(new EmptyBorder(16, 0, 8, 0));
+        panel.setBorder(new EmptyBorder(PAGE_PADDING_TOP, 0, CARD_GAP, 0));
 
         JPanel header = new JPanel(new BorderLayout(8, 0));
         header.setBackground(theme.background());
-        header.setBorder(new EmptyBorder(0, 0, 10, 0));
+        header.setBorder(new EmptyBorder(0, 0, HEADER_BOTTOM_GAP, 0));
         header.add(makeLabel("Economic Calendar 2026", HEADING_FONT, theme.primaryText()), BorderLayout.WEST);
         JPanel headerRight = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
         headerRight.setBackground(theme.background());
@@ -4743,9 +4934,9 @@ public class Main {
         applyTableStyling(econTable);
         econTable.setShowGrid(true);
         econTable.setGridColor(theme.border());
-        econTable.setSelectionBackground(new Color(42, 60, 96));
+        econTable.setSelectionBackground(theme.selectionBg());
         econTable.getTableHeader().setFont(CAPTION_FONT);
-        econTable.getTableHeader().setBackground(new Color(24, 24, 38));
+        econTable.getTableHeader().setBackground(theme.card());
         econTable.getTableHeader().setForeground(theme.accent());
 
         SimpleDateFormat econSdf = new SimpleDateFormat("MMM dd, yyyy");
@@ -4775,6 +4966,7 @@ public class Main {
                 JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
         scroll.setBorder(BorderFactory.createLineBorder(theme.border(), 1));
         scroll.getViewport().setBackground(theme.background());
+        scroll.getVerticalScrollBar().setUnitIncrement(16);
 
         panel.add(scroll, BorderLayout.CENTER);
 
@@ -4844,16 +5036,16 @@ public class Main {
     private JPanel buildDividendCalendarPanel() {
         JPanel panel = new JPanel(new BorderLayout(0, 10));
         panel.setBackground(theme.background());
-        panel.setBorder(new EmptyBorder(16, 0, 8, 0));
+        panel.setBorder(new EmptyBorder(PAGE_PADDING_TOP, 0, CARD_GAP, 0));
 
         JPanel header = new JPanel(new BorderLayout(8, 0));
         header.setBackground(theme.background());
-        header.setBorder(new EmptyBorder(0, 0, 10, 0));
+        header.setBorder(new EmptyBorder(0, 0, HEADER_BOTTOM_GAP, 0));
         header.add(makeLabel("Dividend Calendar", HEADING_FONT, theme.primaryText()), BorderLayout.WEST);
         JPanel headerRight = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
         headerRight.setBackground(theme.background());
         dividendStatusLabel = makeLabel("Load your watchlist tickers to see upcoming dividends.", CAPTION_FONT, theme.mutedText());
-        JButton refreshBtn = makeActionButton("\u21BB Refresh");
+        JButton refreshBtn = makeActionButton("Refresh");
         refreshBtn.addActionListener(e -> refreshDividendsInBackground());
         headerRight.add(dividendStatusLabel);
         headerRight.add(refreshBtn);
@@ -4935,6 +5127,7 @@ public class Main {
                 JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
         scroll.setBorder(BorderFactory.createLineBorder(theme.border(), 1));
         scroll.getViewport().setBackground(theme.background());
+        scroll.getVerticalScrollBar().setUnitIncrement(16);
 
         JPanel tableCard = new JPanel(new BorderLayout());
         tableCard.setBackground(theme.card());
@@ -5004,13 +5197,22 @@ public class Main {
                 else if (colorMatches(fg, prev.loss())) lbl.setForeground(theme.loss());
             }
             if (c instanceof JButton btn) {
-                Color bg = btn.getBackground();
-                if (colorMatches(bg, prev.btnBg())) btn.setBackground(theme.btnBg());
-                else if (colorMatches(bg, prev.btnHoverBg())) btn.setBackground(theme.btnHoverBg());
-                else if (colorMatches(bg, prev.background())) btn.setBackground(theme.background());
-                Color fg = btn.getForeground();
-                if (colorMatches(fg, prev.primaryText())) btn.setForeground(theme.primaryText());
-                else if (colorMatches(fg, prev.mutedText())) btn.setForeground(theme.mutedText());
+                Color prevBg = btn.getBackground();
+                if (prevBg != null && colorMatches(prevBg, prev.btnBg())) {
+                    btn.setBackground(theme.btnBg());
+                } else if (prevBg != null && colorMatches(prevBg, prev.btnHoverBg())) {
+                    btn.setBackground(theme.btnHoverBg());
+                } else if (prevBg != null && colorMatches(prevBg, prev.card())) {
+                    btn.setBackground(theme.card());
+                }
+                Color prevFg = btn.getForeground();
+                if (prevFg != null && colorMatches(prevFg, prev.primaryText())) {
+                    btn.setForeground(theme.primaryText());
+                } else if (prevFg != null && colorMatches(prevFg, prev.accent())) {
+                    btn.setForeground(theme.accent());
+                } else if (prevFg != null && colorMatches(prevFg, prev.mutedText())) {
+                    btn.setForeground(theme.mutedText());
+                }
             }
             if (c instanceof JTable t) {
                 t.setBackground(theme.background());
@@ -5023,7 +5225,7 @@ public class Main {
                 sp.getViewport().setBackground(theme.background());
             }
             if (c instanceof JTextField tf) {
-                tf.setBackground(theme.card());
+                tf.setBackground(theme.btnBg());
                 tf.setForeground(theme.primaryText());
                 tf.setCaretColor(theme.accent());
             }
@@ -5068,18 +5270,18 @@ public class Main {
     private JPanel buildEarningsCalendarPanel() {
         JPanel panel = new JPanel(new BorderLayout(0, 10));
         panel.setBackground(theme.background());
-        panel.setBorder(new EmptyBorder(16, 0, 8, 0));
+        panel.setBorder(new EmptyBorder(PAGE_PADDING_TOP, 0, CARD_GAP, 0));
 
         // --- Header -----------------------------------------------------------
         JPanel header = new JPanel(new BorderLayout(8, 0));
         header.setBackground(theme.background());
-        header.setBorder(new EmptyBorder(0, 0, 10, 0));
+        header.setBorder(new EmptyBorder(0, 0, HEADER_BOTTOM_GAP, 0));
         header.add(makeLabel("Earnings Calendar", HEADING_FONT, theme.primaryText()), BorderLayout.WEST);
         JPanel headerRight = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
         headerRight.setBackground(theme.background());
         earningsStatusLabel = makeLabel("Load your watchlist tickers to see upcoming earnings.",
                 CAPTION_FONT, theme.mutedText());
-        JButton refreshBtn = makeActionButton("\u21BB Refresh");
+        JButton refreshBtn = makeActionButton("Refresh");
         refreshBtn.addActionListener(e -> refreshEarningsInBackground());
         headerRight.add(earningsStatusLabel);
         headerRight.add(refreshBtn);
@@ -5091,11 +5293,11 @@ public class Main {
         infoCard.setBackground(theme.card());
         infoCard.setBorder(BorderFactory.createCompoundBorder(
                 BorderFactory.createLineBorder(theme.border(), 1, true),
-                new EmptyBorder(10, 14, 10, 14)));
+                new EmptyBorder(CARD_PADDING_V, CARD_PADDING_H, CARD_PADDING_V, CARD_PADDING_H)));
         JLabel infoLabel = makeLabel(
                 "Shows upcoming earnings for all stocks in your Watchlist.  "
-                + "Color coding: \u25CF green = within 7 days, \u25CF yellow = within 14 days, "
-                + "\u25CF blue = within 30 days.",
+                + "Color coding: green = within 7 days, yellow = within 14 days, "
+                + "blue = within 30 days.",
                 CAPTION_FONT, theme.mutedText());
         infoLabel.setHorizontalAlignment(SwingConstants.LEFT);
         infoCard.add(infoLabel, BorderLayout.CENTER);
@@ -5113,11 +5315,11 @@ public class Main {
         earningsTable.setRowHeight(28);
         earningsTable.setShowGrid(true);
         earningsTable.setGridColor(theme.border());
-        earningsTable.setSelectionBackground(new Color(42, 60, 96));
+        earningsTable.setSelectionBackground(theme.selectionBg());
         earningsTable.setSelectionForeground(theme.primaryText());
         applyTableStyling(earningsTable);
         earningsTable.getTableHeader().setFont(CAPTION_FONT);
-        earningsTable.getTableHeader().setBackground(new Color(24, 24, 38));
+        earningsTable.getTableHeader().setBackground(theme.card());
         earningsTable.getTableHeader().setForeground(theme.accent());
 
         // Custom renderer for color-coded rows
@@ -5181,6 +5383,7 @@ public class Main {
                 JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
         tableScroll.setBorder(BorderFactory.createLineBorder(theme.border(), 1));
         tableScroll.getViewport().setBackground(theme.background());
+        tableScroll.getVerticalScrollBar().setUnitIncrement(16);
 
         JPanel tableCard = new JPanel(new BorderLayout());
         tableCard.setBackground(theme.card());
@@ -5396,12 +5599,12 @@ public class Main {
     private JPanel buildOptionsPanel() {
         JPanel panel = new JPanel(new BorderLayout(0, 10));
         panel.setBackground(theme.background());
-        panel.setBorder(new EmptyBorder(16, 0, 8, 0));
+        panel.setBorder(new EmptyBorder(PAGE_PADDING_TOP, 0, CARD_GAP, 0));
 
         optionsTickerField = new JTextField(8);
         optionsTickerField.setUI(new javax.swing.plaf.basic.BasicTextFieldUI());
         optionsTickerField.setFont(MONOSPACE_FONT);
-        optionsTickerField.setBackground(new Color(10, 10, 10));
+        optionsTickerField.setBackground(theme.btnBg());
         optionsTickerField.setForeground(theme.primaryText());
         optionsTickerField.setOpaque(true);
         optionsTickerField.setCaretColor(theme.accent());
@@ -5440,7 +5643,7 @@ public class Main {
         controlsCard.setBackground(theme.card());
         controlsCard.setBorder(BorderFactory.createCompoundBorder(
                 BorderFactory.createLineBorder(theme.border(), 1, true),
-                new EmptyBorder(12, 14, 12, 14)));
+                new EmptyBorder(CARD_PADDING_V, CARD_PADDING_H, CARD_PADDING_V, CARD_PADDING_H)));
 
         JPanel loadRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
         loadRow.setBackground(theme.card());
@@ -5453,7 +5656,7 @@ public class Main {
         loadRow.add(optionsStatusLabel);
         controlsCard.add(loadRow);
 
-        JPanel summaryGrid = new JPanel(new GridLayout(2, 4, 10, 10));
+        JPanel summaryGrid = new JPanel(new GridLayout(2, 4, CARD_GAP, CARD_GAP));
         summaryGrid.setBackground(theme.card());
         summaryGrid.setBorder(new EmptyBorder(10, 0, 0, 0));
         optionsUnderlyingValueLabel = createOptionsSummaryValueLabel();
@@ -5530,7 +5733,7 @@ public class Main {
         contractsCard.setBackground(theme.card());
         contractsCard.setBorder(BorderFactory.createCompoundBorder(
                 BorderFactory.createLineBorder(theme.border(), 1, true),
-                new EmptyBorder(12, 14, 12, 14)));
+                new EmptyBorder(CARD_PADDING_V, CARD_PADDING_H, CARD_PADDING_V, CARD_PADDING_H)));
 
         JPanel contractsHeader = new JPanel(new BorderLayout());
         contractsHeader.setBackground(theme.card());
@@ -5548,7 +5751,7 @@ public class Main {
         optionsContractsTable.setGridColor(theme.border());
         optionsContractsTable.setRowHeight(26);
         optionsContractsTable.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
-        optionsContractsTable.setSelectionBackground(new Color(42, 60, 96));
+        optionsContractsTable.setSelectionBackground(theme.selectionBg());
         optionsContractsTable.setSelectionForeground(theme.primaryText());
         applyTableStyling(optionsContractsTable);
         optionsContractsTable.setFillsViewportHeight(true);
@@ -5572,7 +5775,7 @@ public class Main {
         JTableHeader optionsHeader = optionsContractsTable.getTableHeader();
         optionsHeader.setUI(new javax.swing.plaf.basic.BasicTableHeaderUI());
         optionsHeader.setFont(CAPTION_FONT);
-        optionsHeader.setBackground(new Color(24, 24, 38));
+        optionsHeader.setBackground(theme.card());
         optionsHeader.setForeground(theme.accent());
         optionsHeader.setBorder(BorderFactory.createLineBorder(theme.border()));
         optionsHeader.setReorderingAllowed(false);
@@ -5618,7 +5821,7 @@ public class Main {
         card.setBackground(theme.background());
         card.setBorder(BorderFactory.createCompoundBorder(
                 BorderFactory.createLineBorder(theme.border(), 1, true),
-                new EmptyBorder(10, 12, 10, 12)));
+                new EmptyBorder(CARD_PADDING_V, CARD_PADDING_H, CARD_PADDING_V, CARD_PADDING_H)));
         card.add(makeLabel(title, CAPTION_FONT, theme.mutedText()), BorderLayout.NORTH);
         card.add(valueLabel, BorderLayout.CENTER);
         return card;
@@ -5629,7 +5832,7 @@ public class Main {
         detailShell.setBackground(theme.card());
         detailShell.setBorder(BorderFactory.createCompoundBorder(
                 BorderFactory.createLineBorder(theme.border(), 1, true),
-                new EmptyBorder(12, 14, 12, 14)));
+                new EmptyBorder(CARD_PADDING_V, CARD_PADDING_H, CARD_PADDING_V, CARD_PADDING_H)));
 
         detailShell.add(makeLabel("Contract Detail", STAT_VALUE_FONT, theme.primaryText()), BorderLayout.NORTH);
 
@@ -5678,6 +5881,17 @@ public class Main {
         content.add(capitalCard);
         content.add(Box.createVerticalStrut(10));
 
+        JLabel payoffHeader = makeLabel("Payoff at Expiration", STAT_VALUE_FONT, theme.primaryText());
+        payoffHeader.setAlignmentX(Component.LEFT_ALIGNMENT);
+        content.add(payoffHeader);
+        content.add(Box.createVerticalStrut(6));
+        optionsPayoffPanel = new OptionsPayoffPanel();
+        optionsPayoffPanel.setAlignmentX(Component.LEFT_ALIGNMENT);
+        optionsPayoffPanel.setPreferredSize(new Dimension(300, 180));
+        optionsPayoffPanel.setMaximumSize(new Dimension(Integer.MAX_VALUE, 180));
+        content.add(optionsPayoffPanel);
+        content.add(Box.createVerticalStrut(10));
+
         JLabel notesHeader = makeLabel("Trade Read", STAT_VALUE_FONT, theme.primaryText());
         notesHeader.setAlignmentX(Component.LEFT_ALIGNMENT);
         content.add(notesHeader);
@@ -5690,7 +5904,7 @@ public class Main {
         optionsDetailNotesArea.setFont(BODY_FONT);
         optionsDetailNotesArea.setBackground(theme.background());
         optionsDetailNotesArea.setForeground(theme.primaryText());
-        optionsDetailNotesArea.setBorder(new EmptyBorder(10, 12, 10, 12));
+        optionsDetailNotesArea.setBorder(new EmptyBorder(CARD_PADDING_V, CARD_PADDING_H, CARD_PADDING_V, CARD_PADDING_H));
         optionsDetailNotesArea.setRows(8);
 
         JScrollPane notesScroll = new JScrollPane(optionsDetailNotesArea,
@@ -5713,7 +5927,7 @@ public class Main {
     }
 
     private JLabel createOptionsDetailValueLabel() {
-        JLabel label = makeLabel("\u2014", new Font("Segoe UI", Font.BOLD, 14), theme.primaryText());
+        JLabel label = makeLabel("\u2014", STAT_VALUE_FONT, theme.primaryText());
         label.setVerticalAlignment(SwingConstants.TOP);
         return label;
     }
@@ -5723,7 +5937,7 @@ public class Main {
         card.setBackground(theme.background());
         card.setBorder(BorderFactory.createCompoundBorder(
                 BorderFactory.createLineBorder(theme.border(), 1, true),
-                new EmptyBorder(10, 12, 10, 12)));
+                new EmptyBorder(CARD_PADDING_V, CARD_PADDING_H, CARD_PADDING_V, CARD_PADDING_H)));
         card.add(makeLabel(title, CAPTION_FONT, theme.mutedText()), BorderLayout.NORTH);
         card.add(valueLabel, BorderLayout.CENTER);
         return card;
@@ -6022,7 +6236,7 @@ public class Main {
             optionsIvRankValueLabel.setForeground(theme.primaryText());
         } else {
             optionsIvRankValueLabel.setText(buildIvRankBar(ivRank));
-            optionsIvRankValueLabel.setFont(new Font("Consolas", Font.BOLD, 12));
+            optionsIvRankValueLabel.setFont(MONOSPACE_FONT.deriveFont(Font.BOLD));
             optionsIvRankValueLabel.setForeground(ivRank < 30 ? theme.gain() : ivRank < 70 ? new Color(255, 200, 50) : theme.loss());
         }
     }
@@ -6086,6 +6300,8 @@ public class Main {
         optionsDetailCapitalLabel.setText(formatOptionsDollar(analysis.midpoint() * 100.0) + " per contract");
         optionsDetailNotesArea.setText(buildOptionsTradeRead(row));
         optionsDetailNotesArea.setCaretPosition(0);
+        if (optionsPayoffPanel != null && currentOptionsChain != null)
+            optionsPayoffPanel.setContract(row, currentOptionsChain.underlyingPrice);
     }
 
     private String buildOptionsTradeRead(OptionTableRow row) {
@@ -6170,7 +6386,7 @@ public class Main {
     private String buildIvRankBar(double rank) {
         int filled = (int) Math.round(rank / 10.0);
         filled = Math.max(0, Math.min(10, filled));
-        return "\u2588".repeat(filled) + "\u2591".repeat(10 - filled) + " " + String.format("%.0f", rank) + "%";
+        return "#".repeat(filled) + "-".repeat(10 - filled) + " " + String.format("%.0f", rank) + "%";
     }
 
     private void clearOptionsDetail() {
@@ -6195,6 +6411,7 @@ public class Main {
                     "Premium, spread quality, break-even, and model sensitivities will appear here after you select a contract.");
             optionsDetailNotesArea.setCaretPosition(0);
         }
+        if (optionsPayoffPanel != null) optionsPayoffPanel.clear();
     }
 
     private void resetOptionsFilters() {
@@ -6605,10 +6822,11 @@ public class Main {
     private JPanel buildComparisonPanel() {
         JPanel panel = new JPanel(new BorderLayout(0, 10));
         panel.setBackground(theme.background());
-        panel.setBorder(new EmptyBorder(16, 0, 8, 0));
+        panel.setBorder(new EmptyBorder(PAGE_PADDING_TOP, 0, CARD_GAP, 0));
 
         JPanel header = new JPanel(new BorderLayout(8, 0));
         header.setBackground(theme.background());
+        header.setBorder(new EmptyBorder(0, 0, HEADER_BOTTOM_GAP, 0));
         header.add(makeLabel("Multi-Stock Comparison", HEADING_FONT, theme.primaryText()), BorderLayout.WEST);
         panel.add(header, BorderLayout.NORTH);
 
@@ -6619,7 +6837,7 @@ public class Main {
         for (int i = 0; i < 5; i++) {
             compTickerFields[i] = new JTextField(6);
             compTickerFields[i].setFont(MONOSPACE_FONT);
-            compTickerFields[i].setBackground(theme.card());
+            compTickerFields[i].setBackground(theme.btnBg());
             compTickerFields[i].setForeground(theme.primaryText());
             compTickerFields[i].setCaretColor(theme.accent());
             compTickerFields[i].setBorder(BorderFactory.createCompoundBorder(
@@ -6646,6 +6864,7 @@ public class Main {
         JScrollPane sp = new JScrollPane(comparisonTable);
         sp.setBorder(BorderFactory.createLineBorder(theme.border(), 1, true));
         sp.getViewport().setBackground(theme.background());
+        sp.getVerticalScrollBar().setUnitIncrement(16);
 
         JPanel center = new JPanel(new BorderLayout(0, 8));
         center.setBackground(theme.background());
@@ -6725,6 +6944,267 @@ public class Main {
             }
         }
         comparisonTableModel.setDataVector(tableData, columns);
+    }
+
+    // =========================================================================
+    // Options Payoff Diagram
+    // =========================================================================
+
+    private class OptionsPayoffPanel extends JPanel {
+        private double strike, premium, underlyingPrice, breakEven, delta;
+        private boolean isCall, hasData;
+
+        void setContract(OptionTableRow row, double underlyingPrice) {
+            OptionsContract c = row.contract();
+            OptionAnalysis a = row.analysis();
+            this.strike = c.strike();
+            this.premium = a.midpoint();
+            this.underlyingPrice = underlyingPrice;
+            this.breakEven = a.breakEven();
+            this.delta = a.delta();
+            this.isCall = row.call();
+            this.hasData = true;
+            repaint();
+        }
+
+        void clear() {
+            hasData = false;
+            repaint();
+        }
+
+        @Override
+        protected void paintComponent(Graphics g) {
+            super.paintComponent(g);
+            Graphics2D g2 = (Graphics2D) g.create();
+            g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+            int w = getWidth(), h = getHeight();
+            g2.setColor(theme.card());
+            g2.fillRect(0, 0, w, h);
+
+            if (!hasData) {
+                g2.setColor(theme.mutedText());
+                g2.setFont(CAPTION_FONT);
+                String msg = "Select a contract";
+                FontMetrics fm = g2.getFontMetrics();
+                g2.drawString(msg, (w - fm.stringWidth(msg)) / 2, h / 2);
+                g2.dispose();
+                return;
+            }
+
+            int lp = 56, rp = 14, tp = 16, bp = 28;
+            int chartW = w - lp - rp;
+            int chartH = h - tp - bp;
+
+            // X range: ±30% around underlying, widened to include strike
+            double xMin = Math.min(underlyingPrice * 0.70, strike * 0.95);
+            double xMax = Math.max(underlyingPrice * 1.30, strike * 1.05);
+
+            // Compute payoff at edges
+            double yAtXMin = isCall ? -premium : (strike - xMin - premium);
+            double yAtXMax = isCall ? (xMax - strike - premium) : -premium;
+
+            // Y range
+            double yMin = Math.min(-premium * 1.15, Math.min(yAtXMin, yAtXMax) * 1.15);
+            double yMax = Math.max(0, Math.max(yAtXMin, yAtXMax)) * 1.15;
+            if (yMax <= 0) yMax = premium * 0.5; // ensure some space above zero
+            if (yMin >= 0) yMin = -premium * 1.15;
+            double yRange = yMax - yMin;
+            if (yRange == 0) yRange = 1;
+
+            // Helper lambdas as local variables
+            // Map data coords to pixel coords
+            // xToPixel: px = lp + (x - xMin) / (xMax - xMin) * chartW
+            // yToPixel: py = tp + (yMax - y) / yRange * chartH
+
+            // --- Grid lines ---
+            // Zero line
+            int yZeroPx = tp + (int)((yMax - 0.0) / yRange * chartH);
+            g2.setColor(new Color(theme.mutedText().getRed(), theme.mutedText().getGreen(),
+                    theme.mutedText().getBlue(), 80));
+            g2.setStroke(new BasicStroke(1f));
+            g2.drawLine(lp, yZeroPx, lp + chartW, yZeroPx);
+
+            // Max loss line (y = -premium)
+            int yMaxLossPx = tp + (int)((yMax - (-premium)) / yRange * chartH);
+            g2.setColor(new Color(theme.border().getRed(), theme.border().getGreen(),
+                    theme.border().getBlue(), 60));
+            g2.drawLine(lp, yMaxLossPx, lp + chartW, yMaxLossPx);
+
+            // --- Build payoff key points ---
+            // Clip helper: we collect (x,y) pairs for the payoff line
+            double[] pxs, pys;
+            if (isCall) {
+                // Flat at -premium from xMin to strike, then linear up
+                double yRight = xMax - strike - premium;
+                pxs = new double[]{xMin, strike, breakEven, xMax};
+                pys = new double[]{-premium, -premium, 0, yRight};
+            } else {
+                // Linear down from xMin, flat at -premium from strike to xMax
+                double yLeft = strike - xMin - premium;
+                pxs = new double[]{xMin, breakEven, strike, xMax};
+                pys = new double[]{yLeft, 0, -premium, -premium};
+            }
+
+            // Convert to pixel arrays
+            int n = pxs.length;
+            int[] pxPix = new int[n];
+            int[] pyPix = new int[n];
+            for (int i = 0; i < n; i++) {
+                pxPix[i] = lp + (int)((pxs[i] - xMin) / (xMax - xMin) * chartW);
+                pyPix[i] = tp + (int)((yMax - Math.max(yMin, Math.min(yMax, pys[i]))) / yRange * chartH);
+            }
+
+            // --- Fill loss region (below zero) ---
+            // Build polygon: payoff points clipped at zero from below
+            Color lossColor = theme.loss();
+            Color gainColor = theme.gain();
+
+            Path2D lossRegion = new Path2D.Double();
+            Path2D gainRegion = new Path2D.Double();
+
+            // Walk through segments, splitting at zero crossings
+            buildFillRegions(pxs, pys, xMin, xMax, yMin, yMax, yZeroPx, lp, tp, chartW, chartH,
+                    lossRegion, gainRegion);
+
+            g2.setColor(new Color(lossColor.getRed(), lossColor.getGreen(), lossColor.getBlue(), 60));
+            g2.fill(lossRegion);
+            g2.setColor(new Color(gainColor.getRed(), gainColor.getGreen(), gainColor.getBlue(), 60));
+            g2.fill(gainRegion);
+
+            // --- Draw payoff line ---
+            g2.setColor(theme.primaryText());
+            g2.setStroke(new BasicStroke(1.8f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+            Path2D payoffLine = new Path2D.Double();
+            payoffLine.moveTo(pxPix[0], pyPix[0]);
+            for (int i = 1; i < n; i++) payoffLine.lineTo(pxPix[i], pyPix[i]);
+            g2.draw(payoffLine);
+
+            // --- Vertical dashed line: current price ---
+            int xCurPx = lp + (int)((underlyingPrice - xMin) / (xMax - xMin) * chartW);
+            g2.setColor(theme.accent());
+            g2.setStroke(new BasicStroke(1f, BasicStroke.CAP_BUTT, BasicStroke.JOIN_MITER,
+                    10f, new float[]{4f, 4f}, 0f));
+            g2.drawLine(xCurPx, tp, xCurPx, tp + chartH);
+            g2.setFont(CAPTION_FONT);
+            FontMetrics fm = g2.getFontMetrics();
+            String curLabel = String.format("$%.2f", underlyingPrice);
+            int curLabelX = Math.max(lp, Math.min(lp + chartW - fm.stringWidth(curLabel), xCurPx - fm.stringWidth(curLabel) / 2));
+            g2.drawString(curLabel, curLabelX, tp - 2);
+
+            // --- Vertical dashed line: break-even ---
+            if (breakEven > xMin && breakEven < xMax) {
+                int xBePx = lp + (int)((breakEven - xMin) / (xMax - xMin) * chartW);
+                g2.setColor(theme.mutedText());
+                g2.setStroke(new BasicStroke(1f, BasicStroke.CAP_BUTT, BasicStroke.JOIN_MITER,
+                        10f, new float[]{3f, 3f}, 0f));
+                g2.drawLine(xBePx, tp, xBePx, tp + chartH);
+                String beLabel = "B/E";
+                int beLabelX = Math.max(lp, Math.min(lp + chartW - fm.stringWidth(beLabel), xBePx - fm.stringWidth(beLabel) / 2));
+                g2.drawString(beLabel, beLabelX, tp + 10);
+            }
+
+            // --- X-axis labels ---
+            g2.setColor(theme.mutedText());
+            g2.setStroke(new BasicStroke(1f));
+            String lblXMin = String.format("$%.0f", xMin);
+            String lblXMid = String.format("$%.0f", underlyingPrice);
+            String lblXMax = String.format("$%.0f", xMax);
+            g2.drawString(lblXMin, lp, h - 6);
+            g2.drawString(lblXMid, xCurPx - fm.stringWidth(lblXMid) / 2, h - 6);
+            g2.drawString(lblXMax, lp + chartW - fm.stringWidth(lblXMax), h - 6);
+
+            // --- Y-axis labels ---
+            g2.setColor(theme.mutedText());
+            // Max loss label
+            String maxLossLbl = String.format("-$%.2f", premium);
+            g2.drawString(maxLossLbl, 2, yMaxLossPx + 4);
+            // Zero label
+            g2.drawString("$0", 2, yZeroPx + 4);
+            // Max gain label (at xMax for call, at xMin for put)
+            double maxGain = isCall ? (xMax - strike - premium) : (strike - xMin - premium);
+            if (maxGain > 0) {
+                int yGainPx = tp + (int)((yMax - Math.min(yMax, maxGain)) / yRange * chartH);
+                String gainLbl = String.format("+$%.2f", maxGain);
+                g2.drawString(gainLbl, 2, yGainPx + 4);
+            }
+
+            g2.dispose();
+        }
+
+        private void buildFillRegions(double[] xs, double[] ys,
+                double xMin, double xMax, double yMin, double yMax,
+                int yZeroPx, int lp, int tp, int chartW, int chartH,
+                Path2D lossOut, Path2D gainOut) {
+
+            // We'll trace the polygon for each region by walking segments
+            // and splitting at y=0 crossings
+            java.util.List<double[]> lossPoints = new java.util.ArrayList<>();
+            java.util.List<double[]> gainPoints = new java.util.ArrayList<>();
+
+            for (int i = 0; i < xs.length - 1; i++) {
+                double x0 = xs[i], y0 = ys[i];
+                double x1 = xs[i+1], y1 = ys[i+1];
+
+                if (y0 <= 0 && y1 <= 0) {
+                    // entire segment below zero: loss
+                    lossPoints.add(new double[]{x0, y0});
+                    if (i == xs.length - 2) lossPoints.add(new double[]{x1, y1});
+                } else if (y0 >= 0 && y1 >= 0) {
+                    // entire segment above zero: gain
+                    gainPoints.add(new double[]{x0, y0});
+                    if (i == xs.length - 2) gainPoints.add(new double[]{x1, y1});
+                } else {
+                    // crossing zero: find intersection
+                    double t = y0 / (y0 - y1);
+                    double xCross = x0 + t * (x1 - x0);
+                    if (y0 < 0) {
+                        // loss then gain
+                        lossPoints.add(new double[]{x0, y0});
+                        lossPoints.add(new double[]{xCross, 0});
+                        gainPoints.add(new double[]{xCross, 0});
+                        if (i == xs.length - 2) gainPoints.add(new double[]{x1, y1});
+                    } else {
+                        // gain then loss
+                        gainPoints.add(new double[]{x0, y0});
+                        gainPoints.add(new double[]{xCross, 0});
+                        lossPoints.add(new double[]{xCross, 0});
+                        if (i == xs.length - 2) lossPoints.add(new double[]{x1, y1});
+                    }
+                }
+            }
+
+            // Build loss polygon (close along zero line)
+            if (!lossPoints.isEmpty()) {
+                lossOut.moveTo(toPixX(lossPoints.get(0)[0], xMin, xMax, lp, chartW),
+                        toPixY(0, yMin, yMax, tp, chartH));
+                for (double[] pt : lossPoints)
+                    lossOut.lineTo(toPixX(pt[0], xMin, xMax, lp, chartW),
+                            toPixY(Math.max(yMin, Math.min(yMax, pt[1])), yMin, yMax, tp, chartH));
+                lossOut.lineTo(toPixX(lossPoints.get(lossPoints.size()-1)[0], xMin, xMax, lp, chartW),
+                        toPixY(0, yMin, yMax, tp, chartH));
+                lossOut.closePath();
+            }
+
+            // Build gain polygon (close along zero line)
+            if (!gainPoints.isEmpty()) {
+                gainOut.moveTo(toPixX(gainPoints.get(0)[0], xMin, xMax, lp, chartW),
+                        toPixY(0, yMin, yMax, tp, chartH));
+                for (double[] pt : gainPoints)
+                    gainOut.lineTo(toPixX(pt[0], xMin, xMax, lp, chartW),
+                            toPixY(Math.min(yMax, Math.max(yMin, pt[1])), yMin, yMax, tp, chartH));
+                gainOut.lineTo(toPixX(gainPoints.get(gainPoints.size()-1)[0], xMin, xMax, lp, chartW),
+                        toPixY(0, yMin, yMax, tp, chartH));
+                gainOut.closePath();
+            }
+        }
+
+        private double toPixX(double x, double xMin, double xMax, int lp, int chartW) {
+            return lp + (x - xMin) / (xMax - xMin) * chartW;
+        }
+
+        private double toPixY(double y, double yMin, double yMax, int tp, int chartH) {
+            return tp + (yMax - y) / (yMax - yMin) * chartH;
+        }
     }
 
     // =========================================================================
@@ -7444,7 +7924,7 @@ public class Main {
             g2.drawLine(leftPadding, panelTop, leftPadding + chartWidth, panelTop);
 
             // Dark background to visually separate RSI from the chart above it
-            g2.setColor(new Color(20, 20, 38));
+            g2.setColor(theme.background().darker());
             g2.fillRect(leftPadding, panelTop + 1, chartWidth, panelHeight - 1);
 
             // Overbought (70) and oversold (30) horizontal reference lines
@@ -7512,7 +7992,7 @@ public class Main {
             g2.drawLine(leftPadding, panelTop, leftPadding + chartWidth, panelTop);
 
             // Dark background
-            g2.setColor(new Color(16, 16, 32));
+            g2.setColor(theme.background().darker());
             g2.fillRect(leftPadding, panelTop + 1, chartWidth, panelHeight - 1);
 
             // Determine Y scale from max absolute value of histogram + MACD

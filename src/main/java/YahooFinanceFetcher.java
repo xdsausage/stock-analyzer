@@ -35,10 +35,10 @@ import java.util.List;
  * (OTC, TSX, LSE, etc.) are rejected with a descriptive error message.
  *
  * <h3>Thread safety</h3>
- * {@link #sessionCrumb} is a shared mutable field accessed from multiple
- * threads.  The current implementation is not synchronised; in practice the
- * app only fires one request at a time from a single SwingWorker so this is
- * safe, but it would need a lock in a multi-threaded context.
+ * {@link #sessionCrumb} is a shared mutable field.  All reads and writes go
+ * through the {@code synchronized} helpers {@link #ensureSessionCrumb()} and
+ * {@link #refreshSessionCrumb()}, so concurrent callers converge on a single
+ * crumb without racing.
  */
 public class YahooFinanceFetcher {
 
@@ -140,7 +140,28 @@ public class YahooFinanceFetcher {
      * Re-fetched automatically when the server returns HTTP 401.
      */
     private static String sessionCrumb = null;
-    private static final Object CRUMB_LOCK = new Object();
+
+    // =========================================================================
+    // Crumb helpers
+    // =========================================================================
+
+    /**
+     * Returns the cached crumb, fetching a new one if needed.
+     * Synchronized to prevent concurrent sessions from racing to establish cookies.
+     */
+    private static synchronized String ensureSessionCrumb() throws Exception {
+        if (sessionCrumb == null) sessionCrumb = fetchNewCrumb();
+        return sessionCrumb;
+    }
+
+    /**
+     * Forces a new crumb fetch (e.g. after a 401 response) and caches the result.
+     * Synchronized so concurrent retries converge on a single refresh.
+     */
+    private static synchronized String refreshSessionCrumb() throws Exception {
+        sessionCrumb = fetchNewCrumb();
+        return sessionCrumb;
+    }
 
     private static final String SECTOR_INFO_URL =
             "https://query1.finance.yahoo.com/v10/finance/quoteSummary/%s" +
@@ -171,19 +192,14 @@ public class YahooFinanceFetcher {
         }
 
         // Ensure we have a valid session crumb before making the real request
-        synchronized (CRUMB_LOCK) {
-            if (sessionCrumb == null) {
-                sessionCrumb = fetchNewCrumb();
-            }
-        }
-
+        String crumb = ensureSessionCrumb();
         HttpResponse<String> response =
-                sendGetRequest(String.format(QUOTE_SUMMARY_URL, upperTicker, sessionCrumb));
+                sendGetRequest(String.format(QUOTE_SUMMARY_URL, upperTicker, crumb));
 
         // 401 means our crumb/session expired — refresh and retry once
         if (response.statusCode() == 401) {
-            synchronized (CRUMB_LOCK) { sessionCrumb = fetchNewCrumb(); }
-            response = sendGetRequest(String.format(QUOTE_SUMMARY_URL, upperTicker, sessionCrumb));
+            crumb    = refreshSessionCrumb();
+            response = sendGetRequest(String.format(QUOTE_SUMMARY_URL, upperTicker, crumb));
         }
 
         if (response.statusCode() != 200) {
@@ -196,15 +212,14 @@ public class YahooFinanceFetcher {
 
     public static SectorInfo fetchSectorInfo(String ticker) {
         try {
-            synchronized (CRUMB_LOCK) {
-                if (sessionCrumb == null) sessionCrumb = fetchNewCrumb();
-            }
-            String url = String.format(SECTOR_INFO_URL, ticker.trim().toUpperCase(), sessionCrumb);
+            String crumb = ensureSessionCrumb();
+            String upperTicker = ticker.trim().toUpperCase();
+            String url = String.format(SECTOR_INFO_URL, upperTicker, crumb);
             HttpResponse<String> resp = sendGetRequest(url);
             if (resp.statusCode() == 401) {
-                synchronized (CRUMB_LOCK) { sessionCrumb = fetchNewCrumb(); }
-                url = String.format(SECTOR_INFO_URL, ticker.trim().toUpperCase(), sessionCrumb);
-                resp = sendGetRequest(url);
+                crumb = refreshSessionCrumb();
+                url   = String.format(SECTOR_INFO_URL, upperTicker, crumb);
+                resp  = sendGetRequest(url);
             }
             if (resp.statusCode() != 200) return new SectorInfo("Unknown", "Unknown");
             JsonObject root = JsonParser.parseString(resp.body()).getAsJsonObject();
@@ -230,18 +245,15 @@ public class YahooFinanceFetcher {
      */
     public static ChartData fetchChart(String ticker, String barInterval,
                                        String timeRange) throws Exception {
-        if (sessionCrumb == null) {
-            sessionCrumb = fetchNewCrumb();
-        }
-
-        String chartUrl = String.format(CHART_URL, ticker, barInterval, timeRange, sessionCrumb);
+        String crumb = ensureSessionCrumb();
+        String chartUrl = String.format(CHART_URL, ticker, barInterval, timeRange, crumb);
         HttpResponse<String> response = sendGetRequest(chartUrl);
 
         // 401 — refresh crumb and retry
         if (response.statusCode() == 401) {
-            sessionCrumb = fetchNewCrumb();
-            chartUrl  = String.format(CHART_URL, ticker, barInterval, timeRange, sessionCrumb);
-            response  = sendGetRequest(chartUrl);
+            crumb    = refreshSessionCrumb();
+            chartUrl = String.format(CHART_URL, ticker, barInterval, timeRange, crumb);
+            response = sendGetRequest(chartUrl);
         }
 
         if (response.statusCode() != 200) {
@@ -318,17 +330,16 @@ public class YahooFinanceFetcher {
      */
     public static List<ScreenerStock> fetchPredefinedScreener(String screenId, int count) {
         try {
-            if (sessionCrumb == null) {
-                try { sessionCrumb = fetchNewCrumb(); }
-                catch (Exception ignored) { /* cookie priming is best-effort here */ }
-            }
+            // The screener URL doesn't take a crumb, but priming the session helps
+            // avoid occasional 401s on the first cold request.
+            ensureSessionCrumb();
             String url = String.format(PREDEFINED_SCREENER_URL,
                     Math.max(1, count),
                     java.net.URLEncoder.encode(screenId.trim(),
                             java.nio.charset.StandardCharsets.UTF_8));
             HttpResponse<String> response = sendGetRequest(url);
             if (response.statusCode() == 401) {
-                sessionCrumb = fetchNewCrumb();
+                refreshSessionCrumb();
                 response = sendGetRequest(url);
             }
             if (response.statusCode() != 200) return new ArrayList<>();
@@ -593,13 +604,9 @@ public class YahooFinanceFetcher {
         if (stockData.exchange == null)
             stockData.exchange = extractString(priceModule, "exchange");
 
-        if (stockData.exchange != null) {
-            String upperExchange = stockData.exchange.toUpperCase();
-            // Known exchange codes used by Yahoo Finance for NASDAQ and NYSE listings
-            if (!isAcceptedUsExchange(stockData.exchange)) {
-                throw new IOException(
-                        "Exchange \"" + stockData.exchange + "\" is not NASDAQ or NYSE.");
-            }
+        if (stockData.exchange != null && !isAcceptedUsExchange(stockData.exchange)) {
+            throw new IOException(
+                    "Exchange \"" + stockData.exchange + "\" is not NASDAQ or NYSE.");
         }
 
         stockData.currency = extractString(priceModule, "currency");
@@ -758,14 +765,13 @@ public class YahooFinanceFetcher {
      * @throws Exception if the network request fails or parsing fails
      */
     public static OptionsChain fetchOptions(String ticker) throws Exception {
-        if (sessionCrumb == null) {
-            sessionCrumb = fetchNewCrumb();
-        }
-        String url = String.format(OPTIONS_URL, ticker.trim().toUpperCase(), sessionCrumb);
+        String crumb = ensureSessionCrumb();
+        String upperTicker = ticker.trim().toUpperCase();
+        String url = String.format(OPTIONS_URL, upperTicker, crumb);
         HttpResponse<String> response = sendGetRequest(url);
         if (response.statusCode() == 401) {
-            sessionCrumb = fetchNewCrumb();
-            url      = String.format(OPTIONS_URL, ticker.trim().toUpperCase(), sessionCrumb);
+            crumb    = refreshSessionCrumb();
+            url      = String.format(OPTIONS_URL, upperTicker, crumb);
             response = sendGetRequest(url);
         }
         if (response.statusCode() != 200) {
@@ -782,16 +788,13 @@ public class YahooFinanceFetcher {
      * @throws Exception if the network request fails or parsing fails
      */
     public static OptionsChain fetchOptions(String ticker, long expirationDate) throws Exception {
-        if (sessionCrumb == null) {
-            sessionCrumb = fetchNewCrumb();
-        }
-        String url = String.format(OPTIONS_DATE_URL, ticker.trim().toUpperCase(),
-                expirationDate, sessionCrumb);
+        String crumb = ensureSessionCrumb();
+        String upperTicker = ticker.trim().toUpperCase();
+        String url = String.format(OPTIONS_DATE_URL, upperTicker, expirationDate, crumb);
         HttpResponse<String> response = sendGetRequest(url);
         if (response.statusCode() == 401) {
-            sessionCrumb = fetchNewCrumb();
-            url      = String.format(OPTIONS_DATE_URL, ticker.trim().toUpperCase(),
-                    expirationDate, sessionCrumb);
+            crumb    = refreshSessionCrumb();
+            url      = String.format(OPTIONS_DATE_URL, upperTicker, expirationDate, crumb);
             response = sendGetRequest(url);
         }
         if (response.statusCode() != 200) {
@@ -896,18 +899,17 @@ public class YahooFinanceFetcher {
         List<EarningsEntry> entries = new ArrayList<>();
         for (String ticker : tickers) {
             try {
-                if (sessionCrumb == null) sessionCrumb = fetchNewCrumb();
-                String url = String.format(EARNINGS_CALENDAR_URL,
-                        ticker.trim().toUpperCase(), sessionCrumb);
+                String crumb = ensureSessionCrumb();
+                String upperTicker = ticker.trim().toUpperCase();
+                String url = String.format(EARNINGS_CALENDAR_URL, upperTicker, crumb);
                 HttpResponse<String> response = sendGetRequest(url);
                 if (response.statusCode() == 401) {
-                    sessionCrumb = fetchNewCrumb();
-                    url      = String.format(EARNINGS_CALENDAR_URL,
-                            ticker.trim().toUpperCase(), sessionCrumb);
+                    crumb    = refreshSessionCrumb();
+                    url      = String.format(EARNINGS_CALENDAR_URL, upperTicker, crumb);
                     response = sendGetRequest(url);
                 }
                 if (response.statusCode() != 200) continue;
-                EarningsEntry entry = parseEarningsEntry(ticker.trim().toUpperCase(), response.body());
+                EarningsEntry entry = parseEarningsEntry(upperTicker, response.body());
                 if (entry != null) entries.add(entry);
             } catch (Exception ignored) { /* skip this ticker */ }
         }
@@ -1004,16 +1006,17 @@ public class YahooFinanceFetcher {
         List<DividendEntry> entries = new ArrayList<>();
         for (String ticker : tickers) {
             try {
-                if (sessionCrumb == null) sessionCrumb = fetchNewCrumb();
-                String url = String.format(DIVIDEND_CALENDAR_URL, ticker.trim().toUpperCase(), sessionCrumb);
+                String crumb = ensureSessionCrumb();
+                String upperTicker = ticker.trim().toUpperCase();
+                String url = String.format(DIVIDEND_CALENDAR_URL, upperTicker, crumb);
                 HttpResponse<String> response = sendGetRequest(url);
                 if (response.statusCode() == 401) {
-                    sessionCrumb = fetchNewCrumb();
-                    url = String.format(DIVIDEND_CALENDAR_URL, ticker.trim().toUpperCase(), sessionCrumb);
+                    crumb    = refreshSessionCrumb();
+                    url      = String.format(DIVIDEND_CALENDAR_URL, upperTicker, crumb);
                     response = sendGetRequest(url);
                 }
                 if (response.statusCode() != 200) continue;
-                DividendEntry entry = parseDividendEntry(ticker.trim().toUpperCase(), response.body());
+                DividendEntry entry = parseDividendEntry(upperTicker, response.body());
                 if (entry != null) entries.add(entry);
             } catch (Exception ignored) {}
         }
@@ -1022,30 +1025,33 @@ public class YahooFinanceFetcher {
 
     private static DividendEntry parseDividendEntry(String ticker, String body) {
         try {
-            JsonObject root = JsonParser.parseString(body).getAsJsonObject();
-            JsonObject qs = root.getAsJsonObject("quoteSummary");
-            if (qs == null || !qs.has("result") || qs.get("result").isJsonNull()) return null;
-            JsonObject result = qs.getAsJsonArray("result").get(0).getAsJsonObject();
+            JsonObject root         = JsonParser.parseString(body).getAsJsonObject();
+            JsonObject quoteSummary = root.getAsJsonObject("quoteSummary");
+            if (quoteSummary == null || !quoteSummary.has("result")
+                    || quoteSummary.get("result").isJsonNull()) return null;
+            JsonObject result = quoteSummary.getAsJsonArray("result").get(0).getAsJsonObject();
 
             String companyName = ticker;
             if (result.has("price") && !result.get("price").isJsonNull()) {
                 JsonObject priceModule = result.getAsJsonObject("price");
-                String ln = extractString(priceModule, "longName");
-                String sn = extractString(priceModule, "shortName");
-                if (ln != null && !ln.isBlank()) companyName = ln;
-                else if (sn != null && !sn.isBlank()) companyName = sn;
+                String longName  = extractString(priceModule, "longName");
+                String shortName = extractString(priceModule, "shortName");
+                if      (longName  != null && !longName.isBlank())  companyName = longName;
+                else if (shortName != null && !shortName.isBlank()) companyName = shortName;
             }
 
             long exDivDate = 0;
             if (result.has("calendarEvents") && !result.get("calendarEvents").isJsonNull()) {
-                JsonObject cal = result.getAsJsonObject("calendarEvents");
-                if (cal.has("exDividendDate") && !cal.get("exDividendDate").isJsonNull()) {
-                    JsonElement el = cal.get("exDividendDate");
-                    if (el.isJsonObject()) {
-                        JsonElement raw = el.getAsJsonObject().get("raw");
-                        if (raw != null && !raw.isJsonNull()) exDivDate = raw.getAsLong();
-                    } else if (el.isJsonPrimitive()) {
-                        try { exDivDate = el.getAsLong(); } catch (Exception ignored) {}
+                JsonObject calendarEvents = result.getAsJsonObject("calendarEvents");
+                if (calendarEvents.has("exDividendDate")
+                        && !calendarEvents.get("exDividendDate").isJsonNull()) {
+                    JsonElement exDivDateElement = calendarEvents.get("exDividendDate");
+                    if (exDivDateElement.isJsonObject()) {
+                        JsonElement rawTimestamp = exDivDateElement.getAsJsonObject().get("raw");
+                        if (rawTimestamp != null && !rawTimestamp.isJsonNull())
+                            exDivDate = rawTimestamp.getAsLong();
+                    } else if (exDivDateElement.isJsonPrimitive()) {
+                        try { exDivDate = exDivDateElement.getAsLong(); } catch (Exception ignored) {}
                     }
                 }
             }
@@ -1054,10 +1060,10 @@ public class YahooFinanceFetcher {
             double dividendAmount = 0, dividendYield = 0;
             String frequency = "\u2014";
             if (result.has("summaryDetail") && !result.get("summaryDetail").isJsonNull()) {
-                JsonObject sd = result.getAsJsonObject("summaryDetail");
-                dividendAmount = extractRawDouble(sd, "dividendRate", 0.0);
-                dividendYield  = extractRawDouble(sd, "dividendYield", 0.0) * 100.0;
-                double freqVal = extractRawDouble(sd, "dividendFrequency", 0.0);
+                JsonObject summaryDetail = result.getAsJsonObject("summaryDetail");
+                dividendAmount = extractRawDouble(summaryDetail, "dividendRate",      0.0);
+                dividendYield  = extractRawDouble(summaryDetail, "dividendYield",     0.0) * 100.0;
+                double freqVal = extractRawDouble(summaryDetail, "dividendFrequency", 0.0);
                 frequency = freqVal == 4 ? "Quarterly" : freqVal == 12 ? "Monthly"
                         : freqVal == 2 ? "Semi-Annual" : freqVal == 1 ? "Annual" : "\u2014";
             }
@@ -1083,9 +1089,9 @@ public class YahooFinanceFetcher {
         double change          = extractRawDouble(obj, "change",           0.0);
         double changePercent   = extractRawDouble(obj, "percentChange",    0.0);
         Double volD            = extractRawDoubleOrNull(obj, "volume");
-        int    volume          = volD != null ? (int) volD.doubleValue() : 0;
+        int    volume          = volD != null ? (int) Math.min(volD.longValue(), Integer.MAX_VALUE) : 0;
         Double oiD             = extractRawDoubleOrNull(obj, "openInterest");
-        int    openInterest    = oiD  != null ? (int) oiD.doubleValue()  : 0;
+        int    openInterest    = oiD  != null ? (int) Math.min(oiD.longValue(),  Integer.MAX_VALUE) : 0;
         double impliedVol      = extractRawDouble(obj, "impliedVolatility", 0.0);
         boolean inTheMoney     = obj.has("inTheMoney")
                 && !obj.get("inTheMoney").isJsonNull()

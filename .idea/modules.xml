@@ -7,6 +7,9 @@
       <module fileurl="file://$PROJECT_DIR$/.idea/modules/com.stockanalyzer.TestingSomething.iml" filepath="$PROJECT_DIR$/.idea/modules/com.stockanalyzer.TestingSomething.iml" />
       <module fileurl="file://$PROJECT_DIR$/.idea/modules/com.stockanalyzer.TestingSomething.main.iml" filepath="$PROJECT_DIR$/.idea/modules/com.stockanalyzer.TestingSomething.main.iml" />
       <module fileurl="file://$PROJECT_DIR$/.idea/modules/com.stockanalyzer.TestingSomething.test.iml" filepath="$PROJECT_DIR$/.idea/modules/com.stockanalyzer.TestingSomething.test.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/modules/stock-analyzer.TestingSomething.iml" filepath="$PROJECT_DIR$/.idea/modules/stock-analyzer.TestingSomething.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/modules/stock-analyzer.TestingSomething.main.iml" filepath="$PROJECT_DIR$/.idea/modules/stock-analyzer.TestingSomething.main.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/modules/stock-analyzer.TestingSomething.test.iml" filepath="$PROJECT_DIR$/.idea/modules/stock-analyzer.TestingSomething.test.iml" />
     </modules>
   </component>
 </project>

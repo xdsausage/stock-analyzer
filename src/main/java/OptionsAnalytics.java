@@ -1,6 +1,6 @@
-import java.util.ArrayList;
 import java.util.List;
 import java.util.TreeSet;
+import java.util.stream.Collectors;
 
 public final class OptionsAnalytics {
 
@@ -78,9 +78,8 @@ public final class OptionsAnalytics {
         double atmCallMid = midpoint(atmCall);
         double atmPutMid = midpoint(atmPut);
         double atmStraddle = atmCallMid + atmPutMid;
-        double impliedMoveAmount = atmStraddle;
         double impliedMovePercent = chain.underlyingPrice > 0
-                ? (impliedMoveAmount / chain.underlyingPrice) * 100.0
+                ? (atmStraddle / chain.underlyingPrice) * 100.0
                 : Double.NaN;
         double maxPainStrike = computeMaxPain(calls, puts);
 
@@ -94,7 +93,7 @@ public final class OptionsAnalytics {
                 daysToExpiration,
                 atmStrike,
                 atmStraddle,
-                impliedMoveAmount,
+                atmStraddle,       // impliedMoveAmount = ATM straddle price
                 impliedMovePercent,
                 maxPainStrike
         );
@@ -113,11 +112,9 @@ public final class OptionsAnalytics {
 
     private static List<OptionsContract> contractsForExpiration(List<OptionsContract> contracts,
                                                                 long expiration) {
-        List<OptionsContract> filtered = new ArrayList<>();
-        for (OptionsContract contract : contracts) {
-            if (contract.expiration() == expiration) filtered.add(contract);
-        }
-        return filtered;
+        return contracts.stream()
+                .filter(c -> c.expiration() == expiration)
+                .collect(Collectors.toList());
     }
 
     private static double findAtmStrike(double spotPrice, List<OptionsContract> calls,
@@ -187,6 +184,13 @@ public final class OptionsAnalytics {
         return 0.5 * (1.0 + erf(x / Math.sqrt(2.0)));
     }
 
+    /**
+     * Rational polynomial approximation of the error function with maximum
+     * absolute error of 1.5×10⁻⁷.
+     *
+     * <p>Source: Abramowitz &amp; Stegun, <em>Handbook of Mathematical Functions</em>,
+     * formula 7.1.26.
+     */
     private static double erf(double x) {
         double sign = x < 0 ? -1.0 : 1.0;
         double ax = Math.abs(x);
