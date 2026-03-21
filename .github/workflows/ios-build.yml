@@ -1,0 +1,105 @@
+name: iOS Build & Test
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'MobilePortStock-iOS/**'
+      - '.github/workflows/ios-build.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'MobilePortStock-iOS/**'
+
+jobs:
+  build-and-test:
+    name: Build & Unit Test
+    runs-on: macos-15        # Xcode 16 / iOS 18 SDK
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_16.app/Contents/Developer
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        working-directory: MobilePortStock-iOS
+        run: xcodegen generate --spec project.yml
+
+      - name: Resolve Swift packages (if any)
+        working-directory: MobilePortStock-iOS
+        run: |
+          xcodebuild -resolvePackageDependencies \
+            -project MobilePortStock.xcodeproj \
+            -scheme MobilePortStock \
+            -destination 'platform=iOS Simulator,name=iPhone 16,OS=latest' \
+            | xcpretty || true
+
+      - name: Build (Debug)
+        working-directory: MobilePortStock-iOS
+        run: |
+          xcodebuild build \
+            -project MobilePortStock.xcodeproj \
+            -scheme MobilePortStock \
+            -configuration Debug \
+            -destination 'platform=iOS Simulator,name=iPhone 16,OS=latest' \
+            -derivedDataPath .build \
+            CODE_SIGNING_ALLOWED=NO \
+            | xcpretty
+
+      - name: Run unit tests
+        working-directory: MobilePortStock-iOS
+        run: |
+          xcodebuild test \
+            -project MobilePortStock.xcodeproj \
+            -scheme MobilePortStock \
+            -configuration Debug \
+            -destination 'platform=iOS Simulator,name=iPhone 16,OS=latest' \
+            -derivedDataPath .build \
+            -only-testing:MobilePortStockTests \
+            CODE_SIGNING_ALLOWED=NO \
+            | xcpretty
+
+      - name: Upload build logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: MobilePortStock-iOS/.build/Logs/
+          retention-days: 7
+
+  build-ipad:
+    name: Build for iPad
+    runs-on: macos-15
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_16.app/Contents/Developer
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        working-directory: MobilePortStock-iOS
+        run: xcodegen generate --spec project.yml
+
+      - name: Build for iPad simulator
+        working-directory: MobilePortStock-iOS
+        run: |
+          xcodebuild build \
+            -project MobilePortStock.xcodeproj \
+            -scheme MobilePortStock \
+            -configuration Debug \
+            -destination 'platform=iOS Simulator,name=iPad Pro 13-inch (M4),OS=latest' \
+            -derivedDataPath .build \
+            CODE_SIGNING_ALLOWED=NO \
+            | xcpretty
